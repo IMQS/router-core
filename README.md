@@ -1,8 +1,8 @@
 Building:
 
 * Run `env.bat`
-* Run `go run frontdoor\src\github.com\IMQS\socklisten.go`. This will listen on localhost:8081
-* Run `go run frontdoor\src\github.com\IMQS\frontdoor.go`. This will listen on localhost:8080
+* Run `go run src\github.com\IMQS\frontdoor\socklisten.go`. This will listen on localhost:8081
+* Run `go run src\github.com\IMQS\frontdoor\frontdoor.go`. This will listen on localhost:8080
 * You can now point Chrome at `localhost:8080` and in the console you should see messages
 about communicating with a websocket. The 'socklisten' application will also spit out messages to stdout.
 
