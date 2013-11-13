@@ -6,6 +6,6 @@ import (
 
 func main() {
 	s := frontdoor.NewServer()
-	s.HttpServer.Addr = ":8080"
+	s.HttpServer.Addr = ":80"
 	s.ListenAndServe()
 }

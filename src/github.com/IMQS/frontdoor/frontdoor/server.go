@@ -1,17 +1,20 @@
+//Package frontdoor provides proxy functionality for http and websockets.
 package frontdoor
 
 import (
 	"code.google.com/p/go.net/websocket"
-	"fmt"
+	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
+type Writer func(*http.Response) (io.WriteCloser, error)
+
 type Server struct {
 	HttpServer *http.Server
-
 	httpClient *http.Client
+	routes     *Routes
+//	writers    []Writer
 }
 
 func NewServer() *Server {
@@ -26,7 +29,7 @@ func NewServer() *Server {
 	s.httpClient = &http.Client{
 		Transport: httpTransport,
 	}
-
+	s.routes = NewRoutes()
 	return s
 }
 
@@ -35,63 +38,96 @@ func (s *Server) ListenAndServe() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	fmt.Printf("URL Path = %v\n", req.URL.Path)
-	//w.WriteHeader(http.StatusOK)
-	//response.Header().Set("key", value)
-	if strings.Index(req.URL.Path, "/ws") == 0 {
-		s.forwardWebsocket(w, req)
-	} else if strings.Index(req.URL.Path, "/") == 0 {
-		s.forwardHttp(w, req)
-	} else {
-		http.Error(w, "Unknown backend", http.StatusNotFound)
+
+	newurl, scheme := s.routes.Route(req)
+	//fmt.Printf("\n\n New URL : %s\n\n",newurl)
+	switch scheme {
+	case "http":
+		s.forwardHttp(w, req, newurl)
+	case "ws":
+		s.forwardWebsocket(w, req, newurl)
 	}
 }
 
-func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request) {
-	useStatic := true
-	if useStatic {
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(myHtml))
+func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string) {
+	//PrintRequest(req, "Original Request")
+	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 
+	//PrintRequest(cleaned, "New Clean Request")
+
+	copyheaders := func(src http.Header, dst http.Header) {
+		for k, vv := range src {
+			for _, v := range vv {
+				dst.Add(k, v)
+			}
+		}
+	}
+
+	copyheaders(req.Header, cleaned.Header)
+	//cleaned.Header.Add("Host", cleaned.Host)
+	cleaned.Proto = req.Proto
+	//cleaned.Host = req.Host
+	cleaned.ContentLength = req.ContentLength
+
+	//PrintRequest(cleaned, "Cleaned Request")
+
+	// httpClient does not allow RequestURI to be set
+	//req.RequestURI = ""
+	resp, e := s.httpClient.Do(cleaned)
+	if e != nil {
+		http.Error(w, e.Error(), http.StatusGatewayTimeout)
 	} else {
-		fullURI := "http://localhost:80" + req.RequestURI[5:]
-		//fmt.Printf("fullURI: %v\n", fullURI)
-		cleaned, err := http.NewRequest(req.Method, fullURI, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		//resp.Write(w)
+		//PrintResponse(resp, "Actual Response")
+		copyheaders(resp.Header, w.Header())
+		w.WriteHeader(resp.StatusCode)
+		
+		//wclosers := make([]io.WriteCloser, 0, 0)
+
+		//for i, _ := range s.writers {
+		//	wcloser, err := s.writers[i](resp)
+		//	if wcloser != nil {
+		//		wclosers = append(wclosers, wcloser)
+		//	}
+		//	if err != nil {
+		//		log.Panic(err)
+		//	}
+		//}
+
+		if resp.Body != nil {
+			writers := make([]io.Writer, 0, 1)
+			writers = append(writers, w)
+			//for i, _ := range wclosers {
+			//	writers = append(writers, wclosers[i])
+			//}
+			io.Copy(io.MultiWriter(writers...), resp.Body)
 		}
-		for _, cookie := range req.Cookies() {
-			cleaned.AddCookie(cookie)
-		}
-		cleaned.Proto = req.Proto
-		cleaned.Host = req.Host
-		// httpClient does not allow RequestURI to be set
-		//req.RequestURI = ""
-		resp, e := s.httpClient.Do(cleaned)
-		if e != nil {
-			http.Error(w, e.Error(), http.StatusGatewayTimeout)
-		} else {
-			resp.Write(w)
-		}
+
+		// Closing response.
+		resp.Body.Close()
+
 	}
 }
 
-func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request) {
+func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newurl string) {
 
-	fmt.Printf("Opening websocket: %v %v\n", req.Method, req.RequestURI)
+	//fmt.Printf("Opening websocket: %v %v\n", req.Method, req.RequestURI)
 
 	myHandler := func(con *websocket.Conn) {
-		fmt.Printf("Inside myhandler\n")
-		fullURI := "ws://localhost:8081/ws"
+		//fmt.Printf("Inside myhandler\n")
+		//fullURI := "ws://localhost:8081/ws"
 		origin := "http://localhost:8080"
-		config, errCfg := websocket.NewConfig(fullURI, origin)
+		config, errCfg := websocket.NewConfig(newurl, origin)
 		if errCfg != nil {
-			fmt.Printf("Error with config: %v\n", errCfg.Error())
+			//fmt.Printf("Error with config: %v\n", errCfg.Error())
 			return
 		}
 		backend, errOpen := websocket.DialConfig(config)
 		if errOpen != nil {
-			fmt.Printf("Error with websocket.DialConfig: %v\n", errOpen.Error())
+			//fmt.Printf("Error with websocket.DialConfig: %v\n", errOpen.Error())
 			return
 		}
 		copy := func(fromSocket *websocket.Conn, toSocket *websocket.Conn, done chan bool) {
@@ -105,11 +141,11 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request) {
 				*/
 				var msg string
 				if e := websocket.Message.Receive(fromSocket, &msg); e != nil {
-					fmt.Printf("Closing connection. Error on fromSocket.Receive (%v)\n", e)
+					//fmt.Printf("Closing connection. Error on fromSocket.Receive (%v)\n", e)
 					break
 				}
 				if e := websocket.Message.Send(toSocket, msg); e != nil {
-					fmt.Printf("Closing connection. Error on toSocket.Send (%v)\n", e)
+					//fmt.Printf("Closing connection. Error on toSocket.Send (%v)\n", e)
 					break
 				}
 			}
@@ -119,65 +155,11 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request) {
 		go copy(con, backend, finished)
 		go copy(backend, con, finished)
 		<-finished
-		fmt.Printf("Closing websocket\n")
+		//fmt.Printf("Closing websocket\n")
 	}
 
 	wsServer := &websocket.Server{}
 	wsServer.Handler = myHandler
 	wsServer.ServeHTTP(w, req)
-	fmt.Printf("wsHandler.ServeHTTP returned\n")
+	//fmt.Printf("wsHandler.ServeHTTP returned\n")
 }
-
-const myHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-</head>
-
-<body>
-</body>
-
-<script>
-
-var numSockets = 1;
-
-function runSocket() {
-	var ws = new WebSocket("ws://localhost:8080/ws");
-	var isOpen = false;
-	var nMsg = 0;
-	var repeat = function() {
-		if ( !isOpen )
-			return;
-		nMsg++;
-		var data = "The date is " + (new Date()).getTime();
-		console.log("Sending '" + data + "' to websocket");
-		ws.send(data);
-		if ( nMsg > 3 ) {
-			console.log("Closing after 3 messages\n");
-			ws.close();
-		}
-		else
-			setTimeout(repeat, 1);
-	}
-
-	ws.onopen = function() {
-		isOpen = true;
-		console.log("open");
-		repeat();
-	}
-	ws.onmessage = function(e) {
-		console.log("data in: " + e.data);
-	};
-	ws.onclose = function() {
-		isOpen = false;
-		console.log("closed");
-	};
-}
-
-for (var isock = 0; isock < numSockets; isock++)
-	runSocket();
-
-</script>
-</html>
-`
