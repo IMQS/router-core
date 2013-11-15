@@ -1,13 +1,49 @@
+/*
+Package frontdoor provides proxy functionality for http and websockets.
+This file provides the routing functionality for the connections. It uses a json routing file of the form :
+[
+	{"target":"server1",
+	 "scheme":"http",
+	 "matches":[
+		 {"match":"/s1p1", "function":"none",  "replace":""},
+		 {"match":"/s1p2", "function":"none",  "replace":""},
+		 {"match":"/s1p3", "function":"none",  "replace":""}
+	 ]},
+	{"target":"server2",
+	 "scheme":"http",
+	 "matches":[
+		 {"match":"/s2p1", "function":"replace", "replace":"/newpath1"},
+		 {"match":"/s2p2",  "function":"remove",  "replace":""},
+		 {"match":"/s2p3", "function":"none",    "replace":""}
+     ]},
+	{"target":"server3:9000",
+	 "scheme":"ws",
+	 "matches":[
+		 {"match":"/wws", "function":"none", "replace":""}
+	 ]}
+]
+	
+In the example above the following will happen assuming frontdoor is deployed on port 80 on server "server":
+
+http://server/s1p1                          -> http://server1/s1p1
+http://server/s1p2                          -> http://server1/s1p2
+http://server/s1p3/query?q=amount&order=asc -> http://server1/s1/p3/query?q=amount&order=asc
+
+http://server/s2p1/further/path/elements     -> http://server2/newpath1/further/path/elements
+http://server/s2p2/further/path/elements     -> http://server2/further/path/elements
+http://server/s2p3/further/path/elements     -> http://server2/s2p3/further/path/elements
+
+ws://server/wws                              -> ws://server3:9000/wws
+
+*/
 package frontdoor
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 )
 
@@ -22,18 +58,14 @@ type Route struct {
 func (r *Route) Generate(req *http.Request) (string, string) {
 	url := new(url.URL)
 	*url = *req.URL
-	//PrintURL(url)
-	//fmt.Println(url)
 	url.Scheme = r.scheme
 	url.Host = r.host
-	//fmt.Println(url.Path)
 	switch r.function {
 	case "remove":
 		url.Path = strings.Replace(url.Path, r.match, "", 1)
 	case "replace":
 		url.Path = strings.Replace(url.Path, r.match, r.replace, 1)
 	}
-	fmt.Println(url.String())
 	return url.String(), r.scheme
 }
 
@@ -81,16 +113,14 @@ func NewRoutes() *Routes {
 func (r *Routes) Route(req *http.Request) (string, string) {
 	var router Router
 	var ok bool
-	re := regexp.MustCompile(`^/(\w+)/`).FindString(req.RequestURI)
+	re := strings.Split(req.RequestURI, "/")[1]
 	switch {
 	case len(re) == 0:
 		re = "/"
 	case len(re) > 0:
-		re = re[:len(re)-1]
+		re = "/" + re
 	}
-	//fmt.Printf("Search key : %s\n", re)
 	if router, ok = (*r)[re]; ok == false {
-		//fmt.Printf("Generate : %s : %s\n", req.RequestURI, re)
 		return req.RequestURI, "http"
 	}
 	return router.Generate(req)

@@ -8,11 +8,12 @@ import (
 
 func main() {
 	http.HandleFunc("/", handleHttp)
-	http.Handle("/ws", websocket.Handler(handler))
+	http.Handle("/wws", websocket.Handler(handler))
 	http.ListenAndServe("localhost:8081", nil)
 }
 
 func handleHttp(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("Serving HTML")
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(code))
 }
@@ -42,6 +43,7 @@ func handler(c *websocket.Conn) {
 		websocket.Message.Send(c, "A random other thing")
 		websocket.Message.Send(c, "A random yet another thing")
 	}
+	c.Close()
 }
 
 const code = `
@@ -55,7 +57,7 @@ const code = `
 </body>
 
 <script>
-var ws = new WebSocket("ws://localhost:8081/ws");
+var ws = new WebSocket("ws://localhost/wws");
 var isOpen = false;
 var nMsg = 0;
 
@@ -71,7 +73,7 @@ repeat = function() {
 		ws.close();
 	}
 	else
-		setTimeout(repeat, 1000);
+		setTimeout(repeat, 2000);
 }
 
 ws.onopen = function() {
