@@ -1,5 +1,5 @@
 /*
-Package frontdoor provides proxy functionality for http and websockets. 
+Package frontdoor provides proxy functionality for http and websockets.
 This file provides the server functionality listening and routing the request to the various backends.
 It further provides logging capabilities in the format of apache logs by the use of the github.com/cespare/go-apachelog package.
 */
@@ -15,12 +15,18 @@ import (
 	"time"
 )
 
+/*
+Server used for serving at the frontdoor.
+*/
 type Server struct {
 	HttpServer *http.Server
 	httpClient *http.Client
 	routes     *Routes
 }
 
+/*
+NewServer creates a new server instance; starting up logging and creating a routing instance.
+*/
 func NewServer() *Server {
 	file, err := os.OpenFile("c:\\imqsvar\\logs\\frontdoor.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
@@ -41,10 +47,18 @@ func NewServer() *Server {
 	return s
 }
 
+/*
+ListenAndServe exposes the embedded HttpServer method.
+*/
 func (s *Server) ListenAndServe() {
 	s.HttpServer.ListenAndServe()
 }
 
+/*
+ServeHTTP is the single frontdoor access point to the frondoor server. All request are handled in this method.
+It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
+between these pipes.
+*/
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	newurl, scheme := s.routes.Route(req)
@@ -56,6 +70,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+/*
+forwardHTTP connects to all http scheme backends and copies bidirectionaly between the incomming
+connections and the backend connections. It also copies to required HTTP headers between the connections making the frontdoor "middle man" invisible to incomming connections.
+The body part of both requests and responses are implemented as Readers, thus allowing the body contents
+to be copied directly down the sockets, negating the requirement to have a buffer here. This allows all
+http bodies, i.e. chunked, to pass through.
+*/
 func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string) {
 	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
 	if err != nil {
@@ -92,7 +113,11 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 	}
 }
 
+/*
+forwardWebsocket does for websockets what forwardHTTP does for http requests. A new socket connection is made to the backend and messages are both ways.
+*/
 func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newurl string) {
+	closeFrame := []byte{0xFF, 0x00}
 
 	myHandler := func(con *websocket.Conn) {
 		origin := "http://localhost"
@@ -109,7 +134,6 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 
 		copy := func(fromSocket *websocket.Conn, toSocket *websocket.Conn, done chan bool) {
 			for {
-
 				var msg string
 				if e := websocket.Message.Receive(fromSocket, &msg); e != nil {
 					//fmt.Printf("Closing connection. Error on fromSocket.Receive (%v)\n", e)
@@ -119,8 +143,11 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 					//fmt.Printf("Closing connection. Error on toSocket.Send (%v)\n", e)
 					break
 				}
-
 			}
+			websocket.Message.Send(toSocket, closeFrame)
+			toSocket.Close()
+			websocket.Message.Send(fromSocket, closeFrame)
+			fromSocket.Close()
 			done <- true
 		}
 
@@ -128,8 +155,6 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 		go copy(con, backend, finished)
 		go copy(backend, con, finished)
 		<-finished
-		con.Close()
-		backend.Close()
 	}
 
 	wsServer := &websocket.Server{}

@@ -1,6 +1,7 @@
 Building:
 
 * Run `env.bat`
+* Run `go get github.com/cespare/go-apachelog`. This will download the logger that is used.
 * Run `go run src\github.com\IMQS\frontdoor\socklisten.go`. This will listen on localhost:8081
 * Run `go run src\github.com\IMQS\frontdoor\frontdoor.go`. This will listen on localhost:8080
 * You can now point Chrome at `localhost:8080` and in the console you should see messages

@@ -22,7 +22,7 @@ This file provides the routing functionality for the connections. It uses a json
 		 {"match":"/wws", "function":"none", "replace":""}
 	 ]}
 ]
-	
+
 In the example above the following will happen assuming frontdoor is deployed on port 80 on server "server":
 
 http://server/s1p1                          -> http://server1/s1p1
@@ -47,7 +47,10 @@ import (
 	"strings"
 )
 
-type Route struct {
+/*
+Route is used internally to generate the new URL for a specific path match.
+*/
+type route struct {
 	match    string
 	scheme   string
 	host     string
@@ -55,7 +58,11 @@ type Route struct {
 	replace  string
 }
 
-func (r *Route) Generate(req *http.Request) (string, string) {
+/*
+Generate is the main function on routing. This determines the new URL and implements
+the remove and replace functions on the new path.
+*/
+func (r *route) generate(req *http.Request) (string, string) {
 	url := new(url.URL)
 	*url = *req.URL
 	url.Scheme = r.scheme
@@ -69,12 +76,36 @@ func (r *Route) Generate(req *http.Request) (string, string) {
 	return url.String(), r.scheme
 }
 
+/*
+Router interface to use in the lookup list.
+*/
 type Router interface {
-	Generate(req *http.Request) (string, string)
+	generate(req *http.Request) (string, string)
 }
 
+/*
+Routes is the main entrypoint into the router functionality. This will typically be used as follows:
+
+type Server struct {
+    ...
+    routes *Routes
+    ...
+}
+
+func NewServer() *Server {
+    s := &Server{}
+    ...
+    s.routes = NewRoutes()
+    ...
+    return s
+}
+
+*/
 type Routes map[string]Router
 
+/*
+NewRoutes reads, parses and stores a routing config file. This is the way to create new routes.
+*/
 func NewRoutes() *Routes {
 
 	type frontdoor_config []struct {
@@ -103,13 +134,25 @@ func NewRoutes() *Routes {
 
 	for _, target := range top {
 		for _, match := range target.Matches {
-			r[match.Match] = &Route{match.Match, target.Scheme, target.Target, match.Function, match.Replace}
+			r[match.Match] = &route{match.Match, target.Scheme, target.Target, match.Function, match.Replace}
 		}
 	}
 
 	return &r
 }
+/*
+Route is where all the good stuff happens. Typical usage (to continue the example above):
 
+func (s *Server) ServeHTTP(..., req *http.Request) {
+    newurl, scheme := s.Routes.Route(req)
+	switch scheme {
+	case "http":
+		s.forwardHttp(w, req, newurl)
+	case "ws":
+		s.forwardWebsocket(w, req, newurl)
+	}
+}
+*/
 func (r *Routes) Route(req *http.Request) (string, string) {
 	var router Router
 	var ok bool
@@ -123,5 +166,5 @@ func (r *Routes) Route(req *http.Request) (string, string) {
 	if router, ok = (*r)[re]; ok == false {
 		return req.RequestURI, "http"
 	}
-	return router.Generate(req)
+	return router.generate(req)
 }
