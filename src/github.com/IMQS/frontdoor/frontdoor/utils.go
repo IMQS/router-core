@@ -1,3 +1,7 @@
+/*
+Package frontdoor provides proxy functionality for http and websockets. This file contains utils to print out
+data structures and can be used during testing and/ordebugging.
+*/
 package frontdoor
 
 import (

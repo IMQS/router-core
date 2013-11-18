@@ -1,0 +1,32 @@
+[
+	{"target":"127.0.0.1:5000",
+	 "scheme":"http",
+	 "matches":[
+		 {"match":"/test1",
+		  "function":"none",
+		  "replace":""},
+		 {"match":"/test2",
+		  "function":"replace",
+		  "replace":"/redirect2"},
+		 {"match":"/test3",
+		  "function":"remove",
+		  "replace":""},
+		 {"match":"/",
+		  "function":"none",
+		  "replace":""}
+     ]},
+	{"target":"nominatim.openstreetmap.org/",
+	 "scheme":"http",
+	 "matches":[
+		 {"match":"/nominatim",
+		  "function":"remove",
+		  "replace":""}
+     ]},
+	{"target":"127.0.0.1:5100",
+	 "scheme":"ws",
+	 "matches":[
+		 {"match":"/wws",
+		  "function":"none",
+		  "replace":""}
+	 ]}
+]

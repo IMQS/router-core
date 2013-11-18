@@ -106,7 +106,7 @@ type Routes map[string]Router
 /*
 NewRoutes reads, parses and stores a routing config file. This is the way to create new routes.
 */
-func NewRoutes() *Routes {
+func NewRoutes(configfilename string) *Routes {
 
 	type frontdoor_config []struct {
 		Matches []struct {
@@ -117,9 +117,12 @@ func NewRoutes() *Routes {
 		Target string `json:"target"` // http://127.0.0.1:2000/
 		Scheme string `json:"scheme"`
 	}
-
+	if len(configfilename) == 0 {
+		// Use standard config file
+		configfilename = "c:\\imqsbin\\conf\\frontdoor_config.json"
+	}
 	r := make(Routes)
-	file, err := os.Open("c:\\imqsbin\\conf\\frontdoor_config.json")
+	file, err := os.Open(configfilename)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -140,6 +143,7 @@ func NewRoutes() *Routes {
 
 	return &r
 }
+
 /*
 Route is where all the good stuff happens. Typical usage (to continue the example above):
 
@@ -153,7 +157,7 @@ func (s *Server) ServeHTTP(..., req *http.Request) {
 	}
 }
 */
-func (r *Routes) Route(req *http.Request) (string, string) {
+func (r *Routes) Route(req *http.Request) (string, string, bool) {
 	var router Router
 	var ok bool
 	re := strings.Split(req.RequestURI, "/")[1]
@@ -164,7 +168,8 @@ func (r *Routes) Route(req *http.Request) (string, string) {
 		re = "/" + re
 	}
 	if router, ok = (*r)[re]; ok == false {
-		return req.RequestURI, "http"
+		return req.RequestURI, "http", false
 	}
-	return router.generate(req)
+	newurl, scheme := router.generate(req)
+	return newurl, scheme, true
 }

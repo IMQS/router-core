@@ -10,8 +10,10 @@ import (
 	"github.com/cespare/go-apachelog"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -22,12 +24,14 @@ type Server struct {
 	HttpServer *http.Server
 	httpClient *http.Client
 	routes     *Routes
+	listener   net.Listener
+	waiter sync.WaitGroup
 }
 
 /*
 NewServer creates a new server instance; starting up logging and creating a routing instance.
 */
-func NewServer() *Server {
+func NewServer(configfilename string) *Server {
 	file, err := os.OpenFile("c:\\imqsvar\\logs\\frontdoor.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		log.Fatal(err)
@@ -43,7 +47,7 @@ func NewServer() *Server {
 	s.httpClient = &http.Client{
 		Transport: httpTransport,
 	}
-	s.routes = NewRoutes()
+	s.routes = NewRoutes(configfilename)
 	return s
 }
 
@@ -51,7 +55,16 @@ func NewServer() *Server {
 ListenAndServe exposes the embedded HttpServer method.
 */
 func (s *Server) ListenAndServe() {
-	s.HttpServer.ListenAndServe()
+	addr := s.HttpServer.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+	var err error
+	s.listener, err = net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.HttpServer.Serve(s.listener)
 }
 
 /*
@@ -60,11 +73,16 @@ It uses Routes to generate the new url and then switches on scheme type to conne
 between these pipes.
 */
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-
-	newurl, scheme := s.routes.Route(req)
+	s.waiter.Add(1)
+	defer s.waiter.Done()
+	newurl, scheme, routed := s.routes.Route(req)
 	switch scheme {
 	case "http":
-		s.forwardHttp(w, req, newurl)
+		if routed {
+			s.forwardHttp(w, req, newurl)
+		} else {
+			// Placeholder for static content handler
+		}
 	case "ws":
 		s.forwardWebsocket(w, req, newurl)
 	}
@@ -117,7 +135,6 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 forwardWebsocket does for websockets what forwardHTTP does for http requests. A new socket connection is made to the backend and messages are both ways.
 */
 func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newurl string) {
-	closeFrame := []byte{0xFF, 0x00}
 
 	myHandler := func(con *websocket.Conn) {
 		origin := "http://localhost"
@@ -144,10 +161,6 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 					break
 				}
 			}
-			websocket.Message.Send(toSocket, closeFrame)
-			toSocket.Close()
-			websocket.Message.Send(fromSocket, closeFrame)
-			fromSocket.Close()
 			done <- true
 		}
 
@@ -161,3 +174,9 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 	wsServer.Handler = myHandler
 	wsServer.ServeHTTP(w, req)
 }
+
+func (s *Server) Stop() {
+	s.listener.Close()
+	s.waiter.Wait()
+}
+
