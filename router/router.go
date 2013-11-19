@@ -1,41 +1,3 @@
-/*
-Package router provides proxy functionality for http and websockets.
-This file provides the routing functionality for the connections. It uses a json routing file of the form :
-[
-	{"target":"server1",
-	 "scheme":"http",
-	 "matches":[
-		 {"match":"/s1p1", "function":"none",  "replace":""},
-		 {"match":"/s1p2", "function":"none",  "replace":""},
-		 {"match":"/s1p3", "function":"none",  "replace":""}
-	 ]},
-	{"target":"server2",
-	 "scheme":"http",
-	 "matches":[
-		 {"match":"/s2p1", "function":"replace", "replace":"/newpath1"},
-		 {"match":"/s2p2",  "function":"remove",  "replace":""},
-		 {"match":"/s2p3", "function":"none",    "replace":""}
-     ]},
-	{"target":"server3:9000",
-	 "scheme":"ws",
-	 "matches":[
-		 {"match":"/wws", "function":"none", "replace":""}
-	 ]}
-]
-
-In the example above the following will happen assuming router is deployed on port 80 on server "server":
-
-http://server/s1p1                          -> http://server1/s1p1
-http://server/s1p2                          -> http://server1/s1p2
-http://server/s1p3/query?q=amount&order=asc -> http://server1/s1/p3/query?q=amount&order=asc
-
-http://server/s2p1/further/path/elements     -> http://server2/newpath1/further/path/elements
-http://server/s2p2/further/path/elements     -> http://server2/further/path/elements
-http://server/s2p3/further/path/elements     -> http://server2/s2p3/further/path/elements
-
-ws://server/wws                              -> ws://server3:9000/wws
-
-*/
 package router
 
 import (
@@ -76,9 +38,7 @@ func (r *route) generate(req *http.Request) (string, string) {
 	return url.String(), r.scheme
 }
 
-/*
-Router interface to use in the lookup list.
-*/
+// Router interface to use in the lookup list.
 type Router interface {
 	generate(req *http.Request) (string, string)
 }
@@ -86,25 +46,70 @@ type Router interface {
 /*
 Routes is the main entrypoint into the router functionality. This will typically be used as follows:
 
-type Server struct {
-    ...
-    routes *Routes
-    ...
-}
+	type Server struct {
+		...
+		routes *Routes
+		...
+	}
 
-func NewServer() *Server {
-    s := &Server{}
-    ...
-    s.routes = NewRoutes()
-    ...
-    return s
-}
+	func NewServer() *Server {
+		s := &Server{}
+		...
+		s.routes = NewRoutes()
+		...
+		return s
+	}
 
 */
 type Routes map[string]Router
 
 /*
 NewRoutes reads, parses and stores a routing config file. This is the way to create new routes.
+
+The config file provides the routing functionality for the connections.
+
+An example config file:
+
+	[
+		{
+			"target": "server1",
+			"scheme": "http",
+			"matches": [
+				{"match": "/s1p1", "function": "none",  "replace": ""},
+				{"match": "/s1p2", "function": "none",  "replace": ""},
+				{"match": "/s1p3", "function": "none",  "replace": ""}
+			]
+		},
+		{
+			"target": "server2",
+			"scheme": "http",
+			"matches": [
+				{"match": "/s2p1", "function": "replace", "replace": "/newpath1"},
+				{"match": "/s2p2", "function": "remove",  "replace": ""},
+				{"match": "/s2p3", "function": "none",    "replace": ""}
+			]
+		},
+		{
+			"target": "server3:9000",
+			"scheme": "ws",
+			"matches": [
+				{"match": "/wws", "function": "none", "replace": ""}
+			]
+		}
+	]
+
+In the example above the following will happen assuming router is deployed on port 80 on server "server":
+
+	http://server/s1p1                           -> http://server1/s1p1
+	http://server/s1p2                           -> http://server1/s1p2
+	http://server/s1p3/query?q=amount&order=asc  -> http://server1/s1/p3/query?q=amount&order=asc
+
+	http://server/s2p1/further/path/elements     -> http://server2/newpath1/further/path/elements
+	http://server/s2p2/further/path/elements     -> http://server2/further/path/elements
+	http://server/s2p3/further/path/elements     -> http://server2/s2p3/further/path/elements
+
+	ws://server/wws                              -> ws://server3:9000/wws
+
 */
 func NewRoutes(configfilename string) *Routes {
 
@@ -147,15 +152,15 @@ func NewRoutes(configfilename string) *Routes {
 /*
 Route is where all the good stuff happens. Typical usage (to continue the example above):
 
-func (s *Server) ServeHTTP(..., req *http.Request) {
-    newurl, scheme := s.Routes.Route(req)
-	switch scheme {
-	case "http":
-		s.forwardHttp(w, req, newurl)
-	case "ws":
-		s.forwardWebsocket(w, req, newurl)
+	func (s *Server) ServeHTTP(..., req *http.Request) {
+		newurl, scheme := s.Routes.Route(req)
+		switch scheme {
+		case "http":
+			s.forwardHttp(w, req, newurl)
+		case "ws":
+			s.forwardWebsocket(w, req, newurl)
+		}
 	}
-}
 */
 func (r *Routes) Route(req *http.Request) (string, string, bool) {
 	var router Router

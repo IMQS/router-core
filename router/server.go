@@ -1,8 +1,3 @@
-/*
-Package router provides proxy functionality for http and websockets.
-This file provides the server functionality listening and routing the request to the various backends.
-It further provides logging capabilities in the format of apache logs by the use of the github.com/cespare/go-apachelog package.
-*/
 package router
 
 import (
@@ -79,7 +74,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if !routed {
 		// Everything not routed is a NotFound "error"
 		http.Error(w, "Not Found", http.StatusNotFound)
-		return 
+		return
 	}
 	switch scheme {
 	case "http":

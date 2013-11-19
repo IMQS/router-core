@@ -1,30 +1,28 @@
+package router
+
 /*
-Package router provides proxy functionality for http and websockets.
-This file provides tests for the router package. 
 In all tests the environment looks like the following :
 
  --------          --------             --------------
 | client |  <-->  | router |  <------> | http backend |
  -------           --------             --------------
                       ^
-                      |               -------------------
-                       ------------> | websocket backend |
-                                      -------------------
+                      |                 -------------------
+                       --------------> | websocket backend |
+                                        -------------------
 
-Http :
+Http:
 Requests are send to the router which routes them to the backend and creates a response body
 with the following format "METHOD <method> URL <backend received url> BODY <backend received body>",
 this is then returned to the router which in turn returns it to client for checking.
 
-Websocket :
-Same as above but since there are no headers or methods in websockets the message received by the 
+Websocket:
+Same as above but since there are no headers or methods in websockets the message received by the
 backend are return to via the router to the client websocket.
-
 
 An external request is also made and returned to the client which means that the test TestHostReplace
 requires a working internet connection to pass.
 */
-package router
 
 import (
 	"bytes"

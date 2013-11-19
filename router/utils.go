@@ -1,8 +1,6 @@
-/*
-Package router provides proxy functionality for http and websockets. This file contains utils to print out
-data structures and can be used during testing and/ordebugging.
-*/
 package router
+
+// This file contains utils to print out data structures and can be used during testing and/or debugging.
 
 import (
 	"fmt"
@@ -10,23 +8,22 @@ import (
 	"net/url"
 )
 
-func PrintHeader(h http.Header) {
+func printHeader(h http.Header) {
 	for k, vv := range h {
 		for _, v := range vv {
 			fmt.Printf("\t%s:%s\n", k, v)
 		}
 	}
-
 }
 
-func PrintRequest(req *http.Request, title string) {
+func printRequest(req *http.Request, title string) {
 	fmt.Printf("%s ###########################\n\n", title)
 	fmt.Printf("Method %s\n", req.Method)
-	PrintURL(req.URL)
+	printURL(req.URL)
 	fmt.Printf("Proto %s\n", req.Proto)
 	fmt.Printf("ProtoMajor %d\n", req.ProtoMajor)
 	fmt.Printf("ProtoMinor %d\n", req.ProtoMinor)
-	PrintHeader(req.Header)
+	printHeader(req.Header)
 	// Body ?
 	fmt.Printf("ContentLength %d\n", req.ContentLength)
 	fmt.Printf("TransferEncoding %v\n", req.TransferEncoding)
@@ -36,20 +33,20 @@ func PrintRequest(req *http.Request, title string) {
 	fmt.Println("#############################\n\n")
 }
 
-func PrintResponse(resp *http.Response, title string) {
+func printResponse(resp *http.Response, title string) {
 	fmt.Printf("%s===================\n\n", title)
 	fmt.Printf("Status %s\n", resp.Status)
 	fmt.Printf("StatusCode %d\n", resp.StatusCode)
 	fmt.Printf("Proto %s\n", resp.Proto)
-	PrintHeader(resp.Header)
+	printHeader(resp.Header)
 	fmt.Printf("ContentLength %d\n", resp.ContentLength)
 	fmt.Printf("TransferEncoding %s\n", resp.TransferEncoding)
 	fmt.Printf("Close %v\n", resp.Close)
-	PrintHeader(resp.Trailer)
+	printHeader(resp.Trailer)
 	fmt.Println("=====================\n\n")
 }
 
-func PrintURL(url *url.URL) {
+func printURL(url *url.URL) {
 	fmt.Println("**********URL*************")
 	fmt.Printf("Scheme : %s\n", url.Scheme)
 	fmt.Printf("Opaque : %s\n", url.Opaque)
