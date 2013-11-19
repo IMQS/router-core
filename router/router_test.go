@@ -48,7 +48,7 @@ func Startup() {
 	back = NewBackend()
 	back.HttpServer.Addr = ":5000"
 	go back.ListenAndServe()
-	srv = router.NewServer(`C:\imqsroot\router\src\github.com\IMQS\router\test_config.json`)
+	srv = router.NewServer(`..\test_config.json`)
 	srv.HttpServer.Addr = ":80"
 	go srv.ListenAndServe()
 	time.Sleep(1 * 1e9)

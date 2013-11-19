@@ -18,7 +18,7 @@ Server used for serving at the router.
 type Server struct {
 	HttpServer *http.Server
 	httpClient *http.Client
-	routes     *Routes
+	router     Router
 	listener   net.Listener
 	waiter     sync.WaitGroup
 }
@@ -42,7 +42,7 @@ func NewServer(configfilename string) *Server {
 	s.httpClient = &http.Client{
 		Transport: httpTransport,
 	}
-	s.routes = NewRoutes(configfilename)
+	s.router = NewRouter(configfilename)
 	return s
 }
 
@@ -70,7 +70,7 @@ between these pipes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.waiter.Add(1)
 	defer s.waiter.Done()
-	newurl, scheme, routed := s.routes.Route(req)
+	newurl, scheme, routed := s.router.Route(req)
 	if !routed {
 		// Everything not routed is a NotFound "error"
 		http.Error(w, "Not Found", http.StatusNotFound)
