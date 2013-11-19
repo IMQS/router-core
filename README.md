@@ -1,21 +1,13 @@
-Building:
+Router
+======
+This is designed to serve as a front-end to your web services, supporting both HTTP
+and Websockets. You configure the router with a config file. This config file
+specifies a set of simple URL rewrite rules. Requests are forwarded onto the
+appropriate backend server, and the response is sent back to the client.
 
-* Run `env.bat`
-* Run `go get github.com/cespare/go-apachelog`. This will download the logger that is used.
-* Run `go run src\github.com\IMQS\frontdoor\socklisten.go`. This will listen on localhost:8081
-* Run `go run src\github.com\IMQS\frontdoor\frontdoor.go`. This will listen on localhost:8080
-* You can now point Chrome at `localhost:8080` and in the console you should see messages
-about communicating with a websocket. The 'socklisten' application will also spit out messages to stdout.
-
-The project structure is screwed up right now -- ie 'frontdoor' inside 'frontdoor'.
-
-To run SublimeText, you'll want to run it from the command line,
-after running 'env.bat', so that your GOPATH is correct for GoSublime's sake.
-
-We choose to bake the websocket library into this project to make 
-CI easier. The websocket repo lives on a mercurial repo.
-
-To update the websocket library, do this
-
-* Run env.bat
-* `go get code.google.com/p/go.net/websocket`
+Why?
+----
+We needed a performant and well-behaved front door to all of our services which
+could forward HTTP as well as Websockets. Nginx fits this bill, but since we
+need to run on Windows, Nginx is a non-starter. We tried for some time to get
+Apache to do this job, but we failed to get Apache to robustly forward websockets.
