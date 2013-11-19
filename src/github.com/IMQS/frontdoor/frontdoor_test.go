@@ -1,3 +1,29 @@
+/*
+Package frontdoor provides proxy functionality for http and websockets.
+This file provides tests for the frontdoor package. 
+In all tests the environment looks like the following :
+
+ --------          -----------             --------------
+| client |  <-->  | frontdoor |  <------> | http backend |
+ -------           -----------             --------------
+                        ^
+                        |                  -------------------
+                         ---------------> | websocket backend |
+                                           -------------------
+
+Http :
+Requests are send to the frontdoor which routes them to the backend and creates a response body
+with the following format "METHOD <method> URL <backend received url> BODY <backend received body>",
+this is then returned to the frontdoor which in turn returns it to client for checking.
+
+Websocket :
+Same as above but since there are no headers or methods in websockets the message received by the 
+backend are return to via the frontdoor to the client websocket.
+
+
+An external request is also made and returned to the client which means that the test TestHostReplace
+requires a working internet connection to pass.
+*/
 package frontdoor
 
 import (
@@ -10,6 +36,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,9 +68,9 @@ func init() {
 }
 
 func TestSimple(t *testing.T) {
-	const expected = "/test1"
+	const expected = "Method GET URL /test1 BODY "
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1" + expected)
+	resp, err := client.Get("http://127.0.0.1/test1")
 	if err != nil {
 		t.Error(err)
 	}
@@ -58,9 +85,9 @@ func TestSimple(t *testing.T) {
 }
 
 func TestLongURL(t *testing.T) {
-	const expected = "/test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/"
+	const expected = "Method GET URL /test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/ BODY "
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1" + expected)
+	resp, err := client.Get("http://127.0.0.1/test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/")
 	if err != nil {
 		t.Error(err)
 	}
@@ -75,7 +102,7 @@ func TestLongURL(t *testing.T) {
 }
 
 func TestNotProxied(t *testing.T) {
-	const expected = ""
+	const expected = "Not Found\n"
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/gert/jan/piet")
 	if err != nil {
@@ -92,7 +119,7 @@ func TestNotProxied(t *testing.T) {
 }
 
 func TestReplaceBaseUrl(t *testing.T) {
-	const expected = "/redirect2/path1/path2"
+	const expected = "Method GET URL /redirect2/path1/path2 BODY "
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/test2/path1/path2")
 	if err != nil {
@@ -109,9 +136,9 @@ func TestReplaceBaseUrl(t *testing.T) {
 }
 
 func TestRemoveBaseUrl(t *testing.T) {
-	const expected = "/and/some/aother/path/elements"
+	const expected = "Method GET URL /and/some/other/path/elements BODY "
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1/test3/and/some/aother/path/elements")
+	resp, err := client.Get("http://127.0.0.1/test3/and/some/other/path/elements")
 	if err != nil {
 		t.Error(err)
 	}
@@ -124,6 +151,8 @@ func TestRemoveBaseUrl(t *testing.T) {
 		t.Errorf("Expected %s received %s", expected, body)
 	}
 }
+
+var externalExpected = `[{"place_id":"8072499","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"824654551","boundingbox":["-33.9658088684082","-33.9658050537109","18.8361072540283","18.836109161377"],"lat":"-33.9658052","lon":"18.8361077","display_name":"Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, South Africa","class":"place","type":"suburb","importance":0.45,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/poi_place_village.p.20.png"},{"place_id":"16447281","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"1465367920","boundingbox":["-33.9660797119141","-33.9660758972168","18.8340282440186","18.8340301513672"],"lat":"-33.9660774","lon":"18.8340294","display_name":"Protea Hotel Stellenbosch, meson, Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, 7600, South Africa","class":"tourism","type":"hotel","importance":0.201,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/accommodation_hotel2.p.20.png"}]`
 
 func TestHostReplace(t *testing.T) {
 	client := &http.Client{}
@@ -139,6 +168,57 @@ func TestHostReplace(t *testing.T) {
 	strbody := string(body)
 	if strbody != externalExpected {
 		t.Errorf("Expected:\n%s \nreceived :\n%s", externalExpected, body)
+	}
+}
+
+func TestBody(t *testing.T) {
+	const expected = "Method GET URL /test1/testbody BODY SomeBodyText"
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", "http://127.0.0.1/test1/testbody", strings.NewReader("SomeBodyText"))
+	if err != nil {
+		t.Error(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Error(err)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Error(err)
+	}
+	resp.Body.Close()
+	strbody := string(body)
+	if strbody != expected {
+		t.Errorf("Expected \"%s\" received \"%s\"", expected, body)
+	}
+}
+
+func TestMethods(t *testing.T) {
+	methods := [4]string{"GET", "DELETE", "POST", "PUT"}
+	expected := [4]string{
+		"Method GET URL /test1/testbody BODY SomeBodyText",
+		"Method DELETE URL /test1/testbody BODY SomeBodyText",
+		"Method POST URL /test1/testbody BODY SomeBodyText",
+		"Method PUT URL /test1/testbody BODY SomeBodyText"}
+	client := &http.Client{}
+	for index, method := range methods {
+		req, err := http.NewRequest(method, "http://127.0.0.1/test1/testbody", strings.NewReader("SomeBodyText"))
+		if err != nil {
+			t.Error(err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Error(err)
+		}
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		resp.Body.Close()
+		strbody := string(body)
+		if strbody != expected[index] {
+			t.Errorf("Expected \"%s\" received \"%s\"", expected[index], body)
+		}
 	}
 }
 
@@ -237,7 +317,8 @@ func TestDone(t *testing.T) {
 	Shutdown()
 }
 
-// Very simple backend server to use for testing
+// Very simple backend server to use for testing the url is returned in the body for checking against
+// the client expected return.
 type backend struct {
 	HttpServer *http.Server
 	listener   net.Listener
@@ -264,7 +345,10 @@ func (b *backend) ListenAndServe() {
 func (b *backend) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	b.waiter.Add(1)
 	defer b.waiter.Done()
-	fmt.Fprintf(w, "%s", html.EscapeString(req.URL.Path))
+	body, _ := ioutil.ReadAll(req.Body)
+	req.Body.Close()
+
+	fmt.Fprintf(w, "Method %s URL %s BODY %s", req.Method, html.EscapeString(req.URL.Path), body)
 }
 
 func (b *backend) Stop() {
@@ -290,5 +374,3 @@ func wsserver(t *testing.T) {
 		t.Fatalf("ListenAndServer : %s", err.Error())
 	}
 }
-
-var externalExpected = `[{"place_id":"8072499","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"824654551","boundingbox":["-33.9658088684082","-33.9658050537109","18.8361072540283","18.836109161377"],"lat":"-33.9658052","lon":"18.8361077","display_name":"Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, South Africa","class":"place","type":"suburb","importance":0.45,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/poi_place_village.p.20.png"},{"place_id":"16447281","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"1465367920","boundingbox":["-33.9660797119141","-33.9660758972168","18.8340282440186","18.8340301513672"],"lat":"-33.9660774","lon":"18.8340294","display_name":"Protea Hotel Stellenbosch, meson, Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, 7600, South Africa","class":"tourism","type":"hotel","importance":0.201,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/accommodation_hotel2.p.20.png"}]`

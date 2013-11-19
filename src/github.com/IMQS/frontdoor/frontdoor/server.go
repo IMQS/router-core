@@ -25,7 +25,7 @@ type Server struct {
 	httpClient *http.Client
 	routes     *Routes
 	listener   net.Listener
-	waiter sync.WaitGroup
+	waiter     sync.WaitGroup
 }
 
 /*
@@ -76,13 +76,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.waiter.Add(1)
 	defer s.waiter.Done()
 	newurl, scheme, routed := s.routes.Route(req)
+	if !routed {
+		// Everything not routed is a NotFound "error"
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return 
+	}
 	switch scheme {
 	case "http":
-		if routed {
-			s.forwardHttp(w, req, newurl)
-		} else {
-			// Placeholder for static content handler
-		}
+		s.forwardHttp(w, req, newurl)
 	case "ws":
 		s.forwardWebsocket(w, req, newurl)
 	}
@@ -179,4 +180,3 @@ func (s *Server) Stop() {
 	s.listener.Close()
 	s.waiter.Wait()
 }
-
