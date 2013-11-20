@@ -43,7 +43,7 @@ type Generator interface {
 }
 
 /*
-router is the container holding all the information required for creating a new url. It also has the 
+router is the container holding all the information required for creating a new url. It also has the
 base regex used to parse the intitial url to find an index into the map
 
 	type Server struct {
@@ -65,6 +65,7 @@ type router struct {
 	routes map[string]Generator
 	re     *regexp.Regexp
 }
+
 /*
 Router is the main entrypoint into the router functionality. This will typically be used as follows:
 
@@ -84,7 +85,7 @@ Router is the main entrypoint into the router functionality. This will typically
 
 */
 type Router interface {
-	Route(req *http.Request) (string, string, bool)
+	Route(req *http.Request) (newurl, scheme string, routed bool)
 }
 
 /*
@@ -152,7 +153,7 @@ func NewRouter(configfilename string) Router {
 
 	filename, err := filepath.Abs(configfilename)
 	if err != nil {
-		log.Fatal(err) 
+		log.Fatal(err)
 	}
 	file, err := os.Open(filename)
 	if err != nil {
@@ -191,13 +192,12 @@ Route is where all the good stuff happens. Typical usage (to continue the exampl
 		}
 	}
 */
-func (r *router) Route(req *http.Request) (string, string, bool) {
+func (r *router) Route(req *http.Request) (newurl, scheme string, routed bool) {
 	re := r.re.FindString(req.RequestURI)
 	generator, ok := r.routes[re]
 	if ok == false {
 		return req.RequestURI, "http", false
 	}
-	newurl, scheme := generator.generate(req)
+	newurl, scheme = generator.generate(req)
 	return newurl, scheme, true
 }
-
