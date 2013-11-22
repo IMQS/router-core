@@ -2,7 +2,6 @@ package router
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -136,7 +135,7 @@ In the example above the following will happen assuming router is deployed on po
 	ws://server/wws                              -> ws://server3:9000/wws
 
 */
-func NewRouter(configfilename string) Router {
+func NewRouter(configfilename string) (Router, error) {
 
 	type router_config []struct {
 		Matches []struct {
@@ -146,18 +145,16 @@ func NewRouter(configfilename string) Router {
 		Target string `json:"target"` // http://127.0.0.1:2000/
 		Scheme string `json:"scheme"`
 	}
-	if len(configfilename) == 0 {
-		log.Fatal("No Config file Specified")
-	}
+
 	r := router{make(map[string]Generator), regexp.MustCompile("^(/\\w*)/??")}
 
 	filename, err := filepath.Abs(configfilename)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	defer file.Close()
 	var top router_config
@@ -165,7 +162,7 @@ func NewRouter(configfilename string) Router {
 	err = decoder.Decode(&top)
 	if err != nil {
 		file.Close()
-		log.Fatal(err)
+		return nil, err
 	}
 
 	for _, target := range top {
@@ -176,7 +173,7 @@ func NewRouter(configfilename string) Router {
 		}
 	}
 
-	return Router(&r)
+	return Router(&r), nil
 }
 
 /*

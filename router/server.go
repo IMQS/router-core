@@ -26,10 +26,10 @@ type Server struct {
 /*
 NewServer creates a new server instance; starting up logging and creating a routing instance.
 */
-func NewServer(configfilename string) *Server {
+func NewServer(configfilename string) (*Server, error) {
 	file, err := os.OpenFile("c:\\imqsvar\\logs\\router.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	s := &Server{}
 	s.HttpServer = &http.Server{}
@@ -42,8 +42,11 @@ func NewServer(configfilename string) *Server {
 	s.httpClient = &http.Client{
 		Transport: httpTransport,
 	}
-	s.router = NewRouter(configfilename)
-	return s
+	s.router, err = NewRouter(configfilename)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 /*

@@ -45,7 +45,6 @@ func RunAsService(handler func()) bool {
 		return false
 	}
 	if interactive {
-		log.Println("Interactive")
 		return false
 	}
 
