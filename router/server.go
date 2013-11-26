@@ -2,6 +2,7 @@ package router
 
 import (
 	"code.google.com/p/go.net/websocket"
+	"fmt"
 	"github.com/cespare/go-apachelog"
 	"io"
 	"log"
