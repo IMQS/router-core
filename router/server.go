@@ -2,12 +2,14 @@ package router
 
 import (
 	"code.google.com/p/go.net/websocket"
+	"fmt"
 	"github.com/cespare/go-apachelog"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -16,11 +18,12 @@ import (
 Server used for serving at the router.
 */
 type Server struct {
-	HttpServer *http.Server
-	httpClient *http.Client
-	router     Router
-	listener   net.Listener
-	waiter     sync.WaitGroup
+	HttpServer  *http.Server
+	httpClient  *http.Client
+	router      Router
+	listener    net.Listener
+	waiter      sync.WaitGroup
+	filechecker *regexp.Regexp
 }
 
 /*
@@ -46,6 +49,7 @@ func NewServer(configfilename string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.filechecker = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
 }
 
@@ -73,6 +77,12 @@ between these pipes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.waiter.Add(1)
 	defer s.waiter.Done()
+	// Catch wsdl here to statically serve - can be exapnded to serve static files.
+	filename := s.filechecker.FindString(req.RequestURI)
+	if filename != "" {
+		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
+		return
+	}
 	newurl, scheme, routed := s.router.Route(req)
 	if !routed {
 		// Everything not routed is a NotFound "error"
