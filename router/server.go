@@ -2,7 +2,6 @@ package router
 
 import (
 	"code.google.com/p/go.net/websocket"
-	"fmt"
 	"github.com/cespare/go-apachelog"
 	"io"
 	"log"
@@ -71,7 +70,7 @@ func (s *Server) ListenAndServe() {
 
 /*
 ServeHTTP is the single router access point to the frondoor server. All request are handled in this method.
-It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
+ It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
 between these pipes.
 */
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
