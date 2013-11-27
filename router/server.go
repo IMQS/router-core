@@ -39,7 +39,7 @@ func NewServer(configfilename string) (*Server, error) {
 
 	httpTransport := &http.Transport{
 		DisableCompression:    true,
-		ResponseHeaderTimeout: time.Second * 5,
+		ResponseHeaderTimeout: time.Second * 60,
 	}
 	s.httpClient = &http.Client{
 		Transport: httpTransport,
@@ -76,7 +76,7 @@ between these pipes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.waiter.Add(1)
 	defer s.waiter.Done()
-	// Catch wsdl here to statically serve - can be exapnded to serve static files.
+	// Catch wsdl here to statically serve - can be exanded to serve static files.
 	filename := s.filechecker.FindString(req.RequestURI)
 	if filename != "" {
 		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
