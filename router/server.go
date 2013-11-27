@@ -76,7 +76,8 @@ between these pipes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.waiter.Add(1)
 	defer s.waiter.Done()
-	// Catch wsdl here to statically serve - can be exanded to serve static files.
+	// Catch wsdl here to statically serve.
+	// Will be exanded to serve static files.
 	filename := s.filechecker.FindString(req.RequestURI)
 	if filename != "" {
 		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
