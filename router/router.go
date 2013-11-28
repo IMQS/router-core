@@ -18,6 +18,7 @@ type generator struct {
 	scheme  string
 	host    string
 	replace string
+	proxy   string
 	re      *regexp.Regexp
 }
 
@@ -25,7 +26,7 @@ type generator struct {
 Generate is the main function on routing. This determines the new URL and implements
 the remove and replace functions on the new path.
 */
-func (g *generator) generate(req *http.Request) (urlstr string, scheme string) {
+func (g *generator) generate(req *http.Request) (urlstr, scheme, proxy string) {
 	url := new(url.URL)
 	*url = *req.URL
 	url.Scheme = g.scheme
@@ -33,12 +34,13 @@ func (g *generator) generate(req *http.Request) (urlstr string, scheme string) {
 	url.Host = g.host
 	url.Path = g.re.ReplaceAllString(url.Path, g.replace)
 	urlstr = url.String()
+	proxy = g.proxy
 	return
 }
 
 // Generator interface to use in the lookup list.
 type Generator interface {
-	generate(req *http.Request) (string, string)
+	generate(req *http.Request) (urlstr, scheme, proxy string)
 }
 
 /*
@@ -84,7 +86,7 @@ Router is the main entrypoint into the router functionality. This will typically
 
 */
 type Router interface {
-	Route(req *http.Request) (newurl, scheme string, routed bool)
+	Route(req *http.Request) (newurl, scheme, proxy string, routed bool)
 }
 
 /*
@@ -141,6 +143,7 @@ func NewRouter(configfilename string) (Router, error) {
 		Matches []struct {
 			Match string `json:"match"` // /assetcap
 			Route string `json:"route"`
+			Proxy string `json:"proxy"`
 		} `json:"matches"`
 		Target string `json:"target"` // http://127.0.0.1:2000/
 		Scheme string `json:"scheme"`
@@ -169,7 +172,7 @@ func NewRouter(configfilename string) (Router, error) {
 		for _, match := range target.Matches {
 			parts := strings.Split(match.Route, "|")
 			r.routes[match.Match] = &generator{match.Match, target.Scheme, target.Target,
-				parts[1], regexp.MustCompile(parts[0])}
+				parts[1], match.Proxy, regexp.MustCompile(parts[0])}
 		}
 	}
 
@@ -189,12 +192,12 @@ Route is where all the good stuff happens. Typical usage (to continue the exampl
 		}
 	}
 */
-func (r *router) Route(req *http.Request) (newurl, scheme string, routed bool) {
+func (r *router) Route(req *http.Request) (newurl, scheme, proxy string, routed bool) {
 	re := r.re.FindString(req.RequestURI)
 	generator, ok := r.routes[re]
 	if ok == false {
-		return req.RequestURI, "http", false
+		return req.RequestURI, "http", "", false
 	}
-	newurl, scheme = generator.generate(req)
-	return newurl, scheme, true
+	newurl, scheme, proxy = generator.generate(req)
+	return newurl, scheme, proxy, true
 }

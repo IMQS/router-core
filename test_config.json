@@ -2,19 +2,19 @@
 	{"target":"127.0.0.1:5000",
 	 "scheme":"http",
 	 "matches":[
-		 {"match":"/test1","route":"(.*)|$1"},
-		 {"match":"/test2","route":"/test2(.*)|/redirect2$1"},
-		 {"match":"/test3","route":"/test3(.*)|$1"},
-		 {"match":"/","route":"(.$)|$1"}
+		 {"match":"/test1","route":"(.*)|$1", "proxy":""},
+		 {"match":"/test2","route":"/test2(.*)|/redirect2$1", "proxy":""},
+		 {"match":"/test3","route":"/test3(.*)|$1", "proxy":""},
+		 {"match":"/","route":"(.$)|$1", "proxy":""}
      ]},
 	{"target":"nominatim.openstreetmap.org/",
 	 "scheme":"http",
 	 "matches":[
-		 {"match":"/nominatim","route":"/nominatim(.*)|$1"}
+		 {"match":"/nominatim","route":"/nominatim(.*)|$1", "proxy":""}
      ]},
 	{"target":"127.0.0.1:5100",
 	 "scheme":"ws",
 	 "matches":[
-		 {"match":"/wws","route":"(.*)|$1"}
+		 {"match":"/wws","route":"(.*)|$1", "proxy":""}
 	 ]}
 ]

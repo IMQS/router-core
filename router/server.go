@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sync"
@@ -48,6 +49,11 @@ func NewServer(configfilename string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	file, err = os.OpenFile("c:\\imqsvar\\logs\\router_server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
+	log.SetOutput(file)
 	s.filechecker = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
 }
@@ -83,7 +89,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
 		return
 	}
-	newurl, scheme, routed := s.router.Route(req)
+	newurl, scheme, proxy, routed := s.router.Route(req)
+	log.Printf("%s %s %s %s", req.RequestURI, newurl, scheme, proxy)
 	if !routed {
 		// Everything not routed is a NotFound "error"
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -91,7 +98,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	switch scheme {
 	case "http":
-		s.forwardHttp(w, req, newurl)
+		s.forwardHttp(w, req, newurl, proxy)
 	case "ws":
 		s.forwardWebsocket(w, req, newurl)
 	}
@@ -105,7 +112,7 @@ The body part of both requests and responses are implemented as Readers, thus al
 to be copied directly down the sockets, negating the requirement to have a buffer here. This allows all
 http bodies, i.e. chunked, to pass through.
 */
-func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string) {
+func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, proxy string) {
 	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -122,7 +129,18 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 	copyheaders(req.Header, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
-
+	actTransport := s.httpClient.Transport.(*http.Transport)
+	// actTransport.CloseIdleConnections()
+	if proxy != "" {
+		proxyurl, err := url.Parse("http://" + proxy)
+		if err != nil {
+			log.Printf("Could not parse proxy")
+		}
+		actTransport.Proxy = http.ProxyURL(proxyurl)
+	} else {
+		actTransport.Proxy = nil
+	}
+	log.Println(actTransport.Proxy)
 	resp, e := s.httpClient.Do(cleaned)
 	if e != nil {
 		http.Error(w, e.Error(), http.StatusGatewayTimeout)
@@ -162,18 +180,18 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 		copy := func(fromSocket *websocket.Conn, toSocket *websocket.Conn, done chan bool) {
 			for {
 				var msg string
-				if e := websocket.Message.Receive(fromSocket, &msg); e != nil {
-					//fmt.Printf("Closing connection. Error on fromSocket.Receive (%v)\n", e)
+				if e := websocket.Message.Receive(fromSocket, &msg); e != nil && e != io.EOF {
+					log.Printf("Closing connection. Error on fromSocket.Receive (%v)\n", e)
 					break
 				}
 				if e := websocket.Message.Send(toSocket, msg); e != nil {
-					//fmt.Printf("Closing connection. Error on toSocket.Send (%v)\n", e)
+					log.Printf("Closing connection. Error on toSocket.Send (%v)\n", e)
 					break
 				}
 			}
+			log.Println(fromSocket)
 			done <- true
 		}
-
 		finished := make(chan bool)
 		go copy(con, backend, finished)
 		go copy(backend, con, finished)

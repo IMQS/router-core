@@ -313,6 +313,20 @@ func TestWebsocket(t *testing.T) {
 		t.Errorf("Expected %s received %s", expected, msg)
 	}
 
+	msg = "testing webserver"
+	if e := websocket.Message.Send(ws, msg); e != nil {
+		t.Fatal(e)
+	}
+
+	if e := websocket.Message.Receive(ws, &msg); e != nil {
+		t.Fatal(e)
+	}
+
+	if msg != expected {
+		t.Errorf("Expected \"%s\" received \"%s\"", expected, msg)
+	}
+	ws.Close()
+
 }
 
 func TestDone(t *testing.T) {
@@ -359,13 +373,20 @@ func (b *backend) Stop() {
 }
 
 func echoHandler(ws *websocket.Conn) {
-	var msg string
-	if err := websocket.Message.Receive(ws, &msg); err != nil {
-
+	log.Println("In Echo")
+	for {
+		var msg string
+		if err := websocket.Message.Receive(ws, &msg); err != nil {
+			log.Printf("EchoServer Receive : %v\n",err)
+			break
+		}
+		msg = "Backend Websocket Received : " + msg
+		if err := websocket.Message.Send(ws, msg); err != nil {
+			log.Printf("EchoServer Send : %v\n",err)
+			break
+		}
 	}
-	msg = "Backend Websocket Received : " + msg
-	if err := websocket.Message.Send(ws, msg); err != nil {
-	}
+	log.Println("Out of echo")
 }
 
 // simple websocket backend
@@ -373,6 +394,7 @@ func wsserver(t *testing.T) {
 	http.Handle("/wws", websocket.Handler(echoHandler))
 	err := http.ListenAndServe(":5100", nil)
 	if err != nil {
-		t.Fatalf("ListenAndServer : %s", err.Error())
+		t.Errorf("ListenAndServer : %s", err.Error())
 	}
+	log.Println("Out of server")
 }
