@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+var connCount int = 0
+
 /*
 Server used for serving at the router.
 */
@@ -130,7 +132,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
 	actTransport := s.httpClient.Transport.(*http.Transport)
-	// actTransport.CloseIdleConnections()
+	actTransport.CloseIdleConnections()
 	if proxy != "" {
 		proxyurl, err := url.Parse("http://" + proxy)
 		if err != nil {
@@ -144,19 +146,20 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	resp, e := s.httpClient.Do(cleaned)
 	if e != nil {
 		http.Error(w, e.Error(), http.StatusGatewayTimeout)
-	} else {
-		copyheaders(resp.Header, w.Header())
-		w.WriteHeader(resp.StatusCode)
-
-		if resp.Body != nil {
-			writers := make([]io.Writer, 0, 1)
-			writers = append(writers, w)
-			io.Copy(io.MultiWriter(writers...), resp.Body)
-		}
-
-		resp.Body.Close()
-
+		return
 	}
+	defer resp.Body.Close()
+	copyheaders(resp.Header, w.Header())
+	w.WriteHeader(resp.StatusCode)
+
+	if resp.Body != nil {
+		writers := make([]io.Writer, 0, 1)
+		writers = append(writers, w)
+		io.Copy(io.MultiWriter(writers...), resp.Body)
+	}
+
+	resp.Body.Close()
+
 }
 
 /*
@@ -204,6 +207,7 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 }
 
 func (s *Server) Stop() {
+	log.Println("Shutting down...")
 	s.listener.Close()
 	s.waiter.Wait()
 }
