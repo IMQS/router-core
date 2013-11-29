@@ -63,7 +63,7 @@ func NewServer(configfilename string) (*Server, error) {
 /*
 ListenAndServe exposes the embedded HttpServer method.
 */
-func (s *Server) ListenAndServe() {
+func (s *Server) ListenAndServe() error {
 	addr := s.HttpServer.Addr
 	if addr == "" {
 		addr = ":http"
@@ -73,7 +73,7 @@ func (s *Server) ListenAndServe() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s.HttpServer.Serve(s.listener)
+	return s.HttpServer.Serve(s.listener)
 }
 
 /*
