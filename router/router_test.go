@@ -28,7 +28,6 @@ import (
 	"bytes"
 	"code.google.com/p/go.net/websocket"
 	"fmt"
-	"github.com/IMQS/router-core/router"
 	"html"
 	"io/ioutil"
 	"log"
@@ -40,32 +39,100 @@ import (
 	"time"
 )
 
-var srv *router.Server
-var back *backend
+const testConfig = `
+[
+	{"target":"127.0.0.1:5000",
+	 "scheme":"http",
+	 "matches":[
+		 {"match":"/test1","route":"(.*)|$1", "proxy":""},
+		 {"match":"/test2","route":"/test2(.*)|/redirect2$1", "proxy":""},
+		 {"match":"/test3","route":"/test3(.*)|$1", "proxy":""},
+		 {"match":"/","route":"(.$)|$1", "proxy":""}
+     ]},
+	{"target":"nominatim.openstreetmap.org/",
+	 "scheme":"http",
+	 "matches":[
+		 {"match":"/nominatim","route":"/nominatim(.*)|$1", "proxy":""}
+     ]},
+	{"target":"127.0.0.1:5100",
+	 "scheme":"ws",
+	 "matches":[
+		 {"match":"/wws","route":"(.*)|$1", "proxy":""}
+	 ]}
+]
+`
 
-func Startup() {
+// We still need to figure out a way to kill the server gracefully.
+// Right now, since we don't know how, we have to simply start the server
+// on the first test, and keep it running for the duration of all tests.
+const useSingleSandbox = true
+
+type sandbox struct {
+	front       *Server
+	back        *backend
+	frontWaiter chan error
+	backWaiter  chan error
+}
+
+var singleSandbox *sandbox
+
+func (s *sandbox) start(t *testing.T) {
+	if t != nil {
+		//t.Log("Starting sandbox")
+	}
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 0
-	back = NewBackend()
-	back.HttpServer.Addr = ":5000"
-	go back.ListenAndServe()
-	srv = router.NewServer(`..\test_config.json`)
-	srv.HttpServer.Addr = ":80"
-	go srv.ListenAndServe()
-	time.Sleep(1 * 1e9)
+	s.back = newBackend()
+	s.back.httpServer.Addr = ":5000"
+	s.backWaiter = goLaunchWaiter(s.back.listenAndServe)
+	var err error
+	var routeConfig *RouterConfig
+	if routeConfig, err = ParseRoutes(strings.NewReader(testConfig)); err != nil {
+		if t != nil {
+			t.Error(err)
+		}
+	}
+	if s.front, err = NewServer(routeConfig); err != nil {
+		if t != nil {
+			t.Error(err)
+		}
+	}
+	s.front.HttpServer.Addr = ":80"
+	s.frontWaiter = goLaunchWaiter(s.front.ListenAndServe)
+	if t != nil {
+		//t.Log("Sandbox started")
+	}
 }
 
-func Shutdown() {
-	back.Stop()
-	srv.Stop()
-	time.Sleep(1 * 1e9)
+func (s *sandbox) stop(t *testing.T) {
+	if useSingleSandbox && s == singleSandbox {
+		// do nothing
+	} else {
+		//t.Log("Stopping sandbox")
+		s.back.stop()
+		s.front.Stop()
+		t.Logf("backWaiter.stop: %v", <-s.backWaiter)
+		t.Logf("frontWaiter.stop: %v", <-s.frontWaiter)
+		//time.Sleep(time.Millisecond * 1000)
+		//t.Log("Sandbox stopped")
+	}
 }
 
-func init() {
-	// Startup router and beckend for all tests
-	Startup()
+func startSandbox(t *testing.T) *sandbox {
+	if useSingleSandbox {
+		if singleSandbox == nil {
+			singleSandbox := &sandbox{}
+			singleSandbox.start(t)
+		}
+		return singleSandbox
+	} else {
+		s := &sandbox{}
+		s.start(t)
+		return s
+	}
 }
 
 func TestSimple(t *testing.T) {
+	sb := startSandbox(t)
 	const expected = "Method GET URL /test1 BODY "
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/test1")
@@ -80,9 +147,11 @@ func TestSimple(t *testing.T) {
 	if !bytes.Equal(body, []byte(expected)) {
 		t.Errorf("Expected %s received %s", expected, body)
 	}
+	sb.stop(t)
 }
 
 func TestLongURL(t *testing.T) {
+	sb := startSandbox(t)
 	const expected = "Method GET URL /test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/ BODY "
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/")
@@ -97,9 +166,11 @@ func TestLongURL(t *testing.T) {
 	if !bytes.Equal(body, []byte(expected)) {
 		t.Errorf("Expected %s received %s", expected, body)
 	}
+	sb.stop(t)
 }
 
 func TestNotProxied(t *testing.T) {
+	sb := startSandbox(t)
 	const expected = "Not Found\n"
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/gert/jan/piet")
@@ -114,9 +185,11 @@ func TestNotProxied(t *testing.T) {
 	if !bytes.Equal(body, []byte(expected)) {
 		t.Errorf("Expected %s received %s", expected, body)
 	}
+	sb.stop(t)
 }
 
 func TestReplaceBaseUrl(t *testing.T) {
+	sb := startSandbox(t)
 	const expected = "Method GET URL /redirect2/path1/path2 BODY "
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/test2/path1/path2")
@@ -131,9 +204,11 @@ func TestReplaceBaseUrl(t *testing.T) {
 	if !bytes.Equal(body, []byte(expected)) {
 		t.Errorf("Expected %s received %s", expected, body)
 	}
+	sb.stop(t)
 }
 
 func TestRemoveBaseUrl(t *testing.T) {
+	sb := startSandbox(t)
 	const expected = "Method GET URL /and/some/other/path/elements BODY "
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/test3/and/some/other/path/elements")
@@ -148,11 +223,13 @@ func TestRemoveBaseUrl(t *testing.T) {
 	if !bytes.Equal(body, []byte(expected)) {
 		t.Errorf("Expected %s received %s", expected, body)
 	}
+	sb.stop(t)
 }
 
 var externalExpected = `[{"place_id":"8072499","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"824654551","boundingbox":["-33.9658088684082","-33.9658050537109","18.8361072540283","18.836109161377"],"lat":"-33.9658052","lon":"18.8361077","display_name":"Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, South Africa","class":"place","type":"suburb","importance":0.45,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/poi_place_village.p.20.png"},{"place_id":"16447281","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"1465367920","boundingbox":["-33.9660797119141","-33.9660758972168","18.8340282440186","18.8340301513672"],"lat":"-33.9660774","lon":"18.8340294","display_name":"Protea Hotel Stellenbosch, meson, Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, 7600, South Africa","class":"tourism","type":"hotel","importance":0.201,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/accommodation_hotel2.p.20.png"}]`
 
 func TestHostReplace(t *testing.T) {
+	sb := startSandbox(t)
 	client := &http.Client{}
 	resp, err := client.Get("http://127.0.0.1/nominatim/search/TechnoPark,+Stellenbosch?format=json")
 	if err != nil {
@@ -167,9 +244,11 @@ func TestHostReplace(t *testing.T) {
 	if strbody != externalExpected {
 		t.Errorf("Expected:\n%s \nreceived :\n%s", externalExpected, body)
 	}
+	sb.stop(t)
 }
 
 func TestBody(t *testing.T) {
+	sb := startSandbox(t)
 	const expected = "Method GET URL /test1/testbody BODY SomeBodyText"
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", "http://127.0.0.1/test1/testbody", strings.NewReader("SomeBodyText"))
@@ -189,9 +268,11 @@ func TestBody(t *testing.T) {
 	if strbody != expected {
 		t.Errorf("Expected \"%s\" received \"%s\"", expected, body)
 	}
+	sb.stop(t)
 }
 
 func TestMethods(t *testing.T) {
+	sb := startSandbox(t)
 	methods := [4]string{"GET", "DELETE", "POST", "PUT"}
 	expected := [4]string{
 		"Method GET URL /test1/testbody BODY SomeBodyText",
@@ -218,6 +299,7 @@ func TestMethods(t *testing.T) {
 			t.Errorf("Expected \"%s\" received \"%s\"", expected[index], body)
 		}
 	}
+	sb.stop(t)
 }
 
 /*
@@ -288,6 +370,7 @@ func TestSingleClientManyRequests(t *testing.T) {
 }
 */
 func TestWebsocket(t *testing.T) {
+	sb := startSandbox(t)
 	expected := "Backend Websocket Received : testing webserver"
 	go wsserver(t)
 	time.Sleep(0.5 * 1e9) // Time for server to start
@@ -309,35 +392,53 @@ func TestWebsocket(t *testing.T) {
 		t.Errorf("Expected %s received %s", expected, msg)
 	}
 
+	msg = "testing webserver"
+	if e := websocket.Message.Send(ws, msg); e != nil {
+		t.Fatal(e)
+	}
+
+	if e := websocket.Message.Receive(ws, &msg); e != nil {
+		t.Fatal(e)
+	}
+
+	if msg != expected {
+		t.Errorf("Expected \"%s\" received \"%s\"", expected, msg)
+	}
+	ws.Close()
+	sb.stop(t)
 }
 
-func TestDone(t *testing.T) {
-	Shutdown()
+func TestFinish(t *testing.T) {
+	if useSingleSandbox {
+		// trick singleSandbox into dying, by making it think it is not the one-and-only
+		single := singleSandbox
+		singleSandbox = nil
+		single.stop(t)
+	}
 }
 
 // Very simple backend server to use for testing the url is returned in the body for checking against
 // the client expected return.
 type backend struct {
-	HttpServer *http.Server
+	httpServer *http.Server
 	listener   net.Listener
 	waiter     sync.WaitGroup
 }
 
-func NewBackend() *backend {
+func newBackend() *backend {
 	b := &backend{}
-	b.HttpServer = &http.Server{}
-	b.HttpServer.Handler = b
+	b.httpServer = &http.Server{}
+	b.httpServer.Handler = b
 	return b
 }
 
-func (b *backend) ListenAndServe() {
-	addr := b.HttpServer.Addr
+func (b *backend) listenAndServe() error {
+	addr := b.httpServer.Addr
 	var err error
-	b.listener, err = net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatal(err)
+	if b.listener, err = net.Listen("tcp", addr); err != nil {
+		return err
 	}
-	b.HttpServer.Serve(b.listener)
+	return b.httpServer.Serve(b.listener)
 }
 
 func (b *backend) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -349,19 +450,39 @@ func (b *backend) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(w, "Method %s URL %s BODY %s", req.Method, html.EscapeString(req.URL.Path), body)
 }
 
-func (b *backend) Stop() {
-	b.listener.Close()
+func (b *backend) stop() {
+	if b.listener != nil {
+		b.listener.Close()
+	}
 	b.waiter.Wait()
 }
 
-func echoHandler(ws *websocket.Conn) {
-	var msg string
-	if err := websocket.Message.Receive(ws, &msg); err != nil {
+// Take as input a long running function that returns an error
+// Return a channel that will wait on a new goroutine for that long running function to return
+// When that function returns, its value is sent to the channel
+func goLaunchWaiter(exec func() error) chan error {
+	rchan := make(chan error)
+	go func() {
+		rchan <- exec()
+	}()
+	return rchan
+}
 
+func echoHandler(ws *websocket.Conn) {
+	log.Println("In Echo")
+	for {
+		var msg string
+		if err := websocket.Message.Receive(ws, &msg); err != nil {
+			log.Printf("EchoServer Receive : %v\n", err)
+			break
+		}
+		msg = "Backend Websocket Received : " + msg
+		if err := websocket.Message.Send(ws, msg); err != nil {
+			log.Printf("EchoServer Send : %v\n", err)
+			break
+		}
 	}
-	msg = "Backend Websocket Received : " + msg
-	if err := websocket.Message.Send(ws, msg); err != nil {
-	}
+	log.Println("Out of echo")
 }
 
 // simple websocket backend
@@ -369,6 +490,7 @@ func wsserver(t *testing.T) {
 	http.Handle("/wws", websocket.Handler(echoHandler))
 	err := http.ListenAndServe(":5100", nil)
 	if err != nil {
-		t.Fatalf("ListenAndServer : %s", err.Error())
+		t.Errorf("ListenAndServer : %s", err.Error())
 	}
+	log.Println("Out of server")
 }

@@ -31,7 +31,7 @@ type Server struct {
 /*
 NewServer creates a new server instance; starting up logging and creating a routing instance.
 */
-func NewServer(configfilename string) (*Server, error) {
+func NewServer(config *RouterConfig) (*Server, error) {
 	file, err := os.OpenFile("c:\\imqsvar\\logs\\router.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		return nil, err
@@ -47,12 +47,10 @@ func NewServer(configfilename string) (*Server, error) {
 	s.httpClient = &http.Client{
 		Transport: httpTransport,
 	}
-	s.router, err = NewRouter(configfilename)
-	if err != nil {
+	if s.router, err = NewRouter(config); err != nil {
 		return nil, err
 	}
-	file, err = os.OpenFile("c:\\imqsvar\\logs\\router_server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
-	if err != nil {
+	if file, err = os.OpenFile("c:\\imqsvar\\logs\\router_server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm); err != nil {
 		return nil, err
 	}
 	log.SetOutput(file)
@@ -60,20 +58,18 @@ func NewServer(configfilename string) (*Server, error) {
 	return s, nil
 }
 
-/*
-ListenAndServe exposes the embedded HttpServer method.
-*/
+// Run the server
 func (s *Server) ListenAndServe() error {
 	addr := s.HttpServer.Addr
 	if addr == "" {
 		addr = ":http"
 	}
 	var err error
-	s.listener, err = net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatal(err)
+	if s.listener, err = net.Listen("tcp", addr); err != nil {
+		return err
 	}
-	return s.HttpServer.Serve(s.listener)
+	err = s.HttpServer.Serve(s.listener)
+	return err
 }
 
 /*
@@ -91,7 +87,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
 		return
 	}
-	newurl, scheme, proxy, routed := s.router.Route(req)
+	newurl, scheme, proxy, routed := s.router.ProcessRoute(req)
 	log.Printf("%s %s %s %s", req.RequestURI, newurl, scheme, proxy)
 	if !routed {
 		// Everything not routed is a NotFound "error"
@@ -157,9 +153,6 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 		writers = append(writers, w)
 		io.Copy(io.MultiWriter(writers...), resp.Body)
 	}
-
-	resp.Body.Close()
-
 }
 
 /*
@@ -208,6 +201,8 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 
 func (s *Server) Stop() {
 	log.Println("Shutting down...")
-	s.listener.Close()
+	if s.listener != nil {
+		s.listener.Close()
+	}
 	s.waiter.Wait()
 }

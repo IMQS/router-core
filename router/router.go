@@ -2,18 +2,15 @@ package router
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
 
-/*
-Generator is used internally to generate the new URL for a specific path match.
-*/
-type generator struct {
+// Describes a route that maps from uncoming URL to backend service
+type route struct {
 	match   string
 	scheme  string
 	host    string
@@ -22,77 +19,83 @@ type generator struct {
 	re      *regexp.Regexp
 }
 
-/*
-Generate is the main function on routing. This determines the new URL and implements
-the remove and replace functions on the new path.
-*/
-func (g *generator) generate(req *http.Request) (urlstr, scheme, proxy string) {
+// Rewrite an incoming URL, so that it is ready to be dispatched to a backend service
+func (r *route) generate(req *http.Request) (urlstr, scheme, proxy string) {
 	url := new(url.URL)
 	*url = *req.URL
-	url.Scheme = g.scheme
-	scheme = g.scheme
-	url.Host = g.host
-	url.Path = g.re.ReplaceAllString(url.Path, g.replace)
-	urlstr = url.String()
-	proxy = g.proxy
-	return
+	url.Scheme = r.scheme
+	url.Host = r.host
+	url.Path = r.re.ReplaceAllString(url.Path, r.replace)
+	return url.String(), r.scheme, r.proxy
 }
 
-// Generator interface to use in the lookup list.
-type Generator interface {
-	generate(req *http.Request) (urlstr, scheme, proxy string)
-}
-
-/*
-router is the container holding all the information required for creating a new url. It also has the
-base regex used to parse the intitial url to find an index into the map
-
-	type Server struct {
-		...
-		routes *Routes
-		...
-	}
-
-	func NewServer() *Server {
-		s := &Server{}
-		...
-		s.routes = NewRoutes()
-		...
-		return s
-	}
-
-*/
-type router struct {
-	routes map[string]Generator
+// This holds the definition of a bunch of routes
+type routeSet struct {
+	routes map[string]*route
 	re     *regexp.Regexp
 }
 
-/*
-Router is the main entrypoint into the router functionality. This will typically be used as follows:
-
-	type Server struct {
-		...
-		router Routes
-		...
-	}
-
-	func NewServer() *Server {
-		s := &Server{}
-		...
-		s.router = NewRouter()
-		...
-		return s
-	}
-
-*/
+// The Router interface is responsible for taking an incoming request and rewriting it
+// for an appropriate backend.
 type Router interface {
-	Route(req *http.Request) (newurl, scheme, proxy string, routed bool)
+	// Rewrite an incoming request. The returned value 'routed' is true if the Router was
+	// able to process the request.
+	ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool)
+}
+
+func (r *routeSet) ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool) {
+	re := r.re.FindString(req.RequestURI)
+	generator, ok := r.routes[re]
+	if !ok {
+		return req.RequestURI, "http", "", false
+	}
+	newurl, scheme, proxy = generator.generate(req)
+	return newurl, scheme, proxy, true
+}
+
+// Top-level configuration of a router
+type RouterConfig []struct {
+	Matches []struct {
+		Match string `json:"match"` // /assetcap
+		Route string `json:"route"`
+		Proxy string `json:"proxy"`
+	} `json:"matches"`
+	Target string `json:"target"` // http://127.0.0.1:2000/
+	Scheme string `json:"scheme"`
+}
+
+// Turn a configuration into a runnable Router
+func NewRouter(config *RouterConfig) (router Router, err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			router = nil
+			err = e.(error)
+		}
+	}()
+
+	routeset := &routeSet{}
+	routeset.routes = make(map[string]*route)
+	routeset.re = regexp.MustCompile("^(/\\w*)/??")
+
+	for _, target := range *config {
+		for _, match := range target.Matches {
+			parts := strings.Split(match.Route, "|")
+			route := &route{}
+			route.match = match.Match
+			route.scheme = target.Scheme
+			route.host = target.Target
+			route.replace = parts[1]
+			route.proxy = match.Proxy
+			route.re = regexp.MustCompile(parts[0])
+			routeset.routes[match.Match] = route
+		}
+	}
+
+	return Router(routeset), nil
 }
 
 /*
-NewRouter reads, parses and stores a routing config file. This is the way to create new routes.
-
-The config file provides the routing functionality for the connections.
+Reads and parse a routing config file, and return a new Router object.
 
 An example config file:
 
@@ -101,18 +104,18 @@ An example config file:
 			"target": "server1",
 			"scheme": "http",
 			"matches": [
-				{"match": "/s1p1", "route":"(.*)|$1"},
-				{"match": "/s1p2", "route":"(.*)|$1"},
-				{"match": "/s1p3", "route":"(.*)|$1"},
+				{"match": "/s1p1", "route": "(.*)|$1"},
+				{"match": "/s1p2", "route": "(.*)|$1"},
+				{"match": "/s1p3", "route": "(.*)|$1"},
 			]
 		},
 		{
 			"target": "server2",
 			"scheme": "http",
 			"matches": [
-				{"match": "/s2p1", "route":"/s2p1(.*)|/newpath1$1"},
-				{"match": "/s2p2", "route":"/s2p2(.*)|$1"},
-				{"match": "/s2p3", "route":"(.*)|$1"}
+				{"match": "/s2p1", "route": "/s2p1(.*)|/newpath1$1"},
+				{"match": "/s2p2", "route": "/s2p2(.*)|$1"},
+				{"match": "/s2p3", "route": "(.*)|$1"}
 			]
 		},
 		{
@@ -137,67 +140,11 @@ In the example above the following will happen assuming router is deployed on po
 	ws://server/wws                              -> ws://server3:9000/wws
 
 */
-func NewRouter(configfilename string) (Router, error) {
-
-	type router_config []struct {
-		Matches []struct {
-			Match string `json:"match"` // /assetcap
-			Route string `json:"route"`
-			Proxy string `json:"proxy"`
-		} `json:"matches"`
-		Target string `json:"target"` // http://127.0.0.1:2000/
-		Scheme string `json:"scheme"`
-	}
-
-	r := router{make(map[string]Generator), regexp.MustCompile("^(/\\w*)/??")}
-
-	filename, err := filepath.Abs(configfilename)
-	if err != nil {
+func ParseRoutes(configReader io.Reader) (*RouterConfig, error) {
+	config := &RouterConfig{}
+	decoder := json.NewDecoder(configReader)
+	if err := decoder.Decode(config); err != nil {
 		return nil, err
 	}
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	var top router_config
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&top)
-	if err != nil {
-		file.Close()
-		return nil, err
-	}
-
-	for _, target := range top {
-		for _, match := range target.Matches {
-			parts := strings.Split(match.Route, "|")
-			r.routes[match.Match] = &generator{match.Match, target.Scheme, target.Target,
-				parts[1], match.Proxy, regexp.MustCompile(parts[0])}
-		}
-	}
-
-	return Router(&r), nil
-}
-
-/*
-Route is where all the good stuff happens. Typical usage (to continue the example above):
-
-	func (s *Server) ServeHTTP(..., req *http.Request) {
-		newurl, scheme := s.Router.Route(req)
-		switch scheme {
-		case "http":
-			s.forwardHttp(w, req, newurl)
-		case "ws":
-			s.forwardWebsocket(w, req, newurl)
-		}
-	}
-*/
-func (r *router) Route(req *http.Request) (newurl, scheme, proxy string, routed bool) {
-	re := r.re.FindString(req.RequestURI)
-	generator, ok := r.routes[re]
-	if ok == false {
-		return req.RequestURI, "http", "", false
-	}
-	newurl, scheme, proxy = generator.generate(req)
-	return newurl, scheme, proxy, true
+	return config, nil
 }
