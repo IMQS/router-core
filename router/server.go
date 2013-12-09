@@ -65,10 +65,20 @@ func (s *Server) ListenAndServe() error {
 		addr = ":http"
 	}
 	var err error
-	if s.listener, err = net.Listen("tcp", addr); err != nil {
-		return err
+	for {
+		if s.listener, err = net.Listen("tcp", addr); err != nil {
+			log.Printf("In Listen error : %s\n", err.Error())
+			return err
+		}
+		err = s.HttpServer.Serve(s.listener)
+		if err != nil {
+			if err.Error() == "AcceptEx tcp [::]:80: The specified network name is no longer available"{
+				log.Println("Restarting")
+			} else {
+				break
+			}
+		}
 	}
-	err = s.HttpServer.Serve(s.listener)
 	return err
 }
 
@@ -128,7 +138,6 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
 	actTransport := s.httpClient.Transport.(*http.Transport)
-	actTransport.CloseIdleConnections()
 	if proxy != "" {
 		proxyurl, err := url.Parse("http://" + proxy)
 		if err != nil {
