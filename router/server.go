@@ -54,6 +54,7 @@ func NewServer(config *RouterConfig) (*Server, error) {
 		return nil, err
 	}
 	log.SetOutput(file)
+	log.Println("Starting v0.00")
 	s.filechecker = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
 }
