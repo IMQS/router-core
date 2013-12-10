@@ -73,8 +73,8 @@ func (s *Server) ListenAndServe() error {
 		}
 		err = s.HttpServer.Serve(s.listener)
 		if err != nil {
-			if err.Error() == "AcceptEx tcp [::]:80: The specified network name is no longer available"{
-				log.Println("Restarting")
+			if err.Error() == "AcceptEx tcp [::]:80: The specified network name is no longer available" {
+				log.Println("Restarting Error 64")
 			} else {
 				break
 			}
