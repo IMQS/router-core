@@ -41,6 +41,8 @@ func NewServer(config *RouterConfig) (*Server, error) {
 	s.HttpServer.Handler = apachelog.NewHandler(s, file)
 
 	httpTransport := &http.Transport{
+		DisableKeepAlives:     false,
+		MaxIdleConnsPerHost:   50,
 		DisableCompression:    true,
 		ResponseHeaderTimeout: time.Second * 60,
 	}
