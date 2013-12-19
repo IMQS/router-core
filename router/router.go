@@ -16,12 +16,12 @@ type route struct {
 	scheme  string
 	host    string
 	replace string
-	proxy   bool
+	proxy   string
 	re      *regexp.Regexp
 }
 
 // Rewrite an incoming URL, so that it is ready to be dispatched to a backend service
-func (r *route) generate(req *http.Request) (urlstr, scheme string, proxy bool) {
+func (r *route) generate(req *http.Request) (urlstr, scheme, proxy string) {
 	url := new(url.URL)
 	*url = *req.URL
 	url.Scheme = r.scheme
@@ -41,14 +41,14 @@ type routeSet struct {
 type Router interface {
 	// Rewrite an incoming request. The returned value 'routed' is true if the Router was
 	// able to process the request.
-	ProcessRoute(req *http.Request) (newurl, scheme string, proxy, routed bool)
+	ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool)
 }
 
-func (r *routeSet) ProcessRoute(req *http.Request) (newurl, scheme string, proxy, routed bool) {
+func (r *routeSet) ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool) {
 	re := r.re.FindString(req.RequestURI)
 	generator, ok := r.routes[re]
 	if !ok {
-		return req.RequestURI, "http", false, false
+		return req.RequestURI, "http", "", false
 	}
 	newurl, scheme, proxy = generator.generate(req)
 	return newurl, scheme, proxy, true
@@ -138,7 +138,7 @@ type Routes map[string]struct {
 
 // Top-level configuration of a router
 type RouterConfig map[string]struct {
-	Proxy   bool `json:"proxy"`
+	Proxy   string `json:"proxy"`
 	Matches Routes
 }
 
@@ -146,7 +146,7 @@ func mergeConfigs(dst, src *RouterConfig) error {
 	for key, srcVal := range *src {
 		if dstVal, ok := (*dst)[key]; ok {
 			// Have same target merge src into dst, for now only proxy and new routes
-			if proxy := srcVal.Proxy; proxy {
+			if proxy := srcVal.Proxy; len(proxy) > 0 {
 				dstVal.Proxy = proxy
 			}
 			(*dst)[key] = dstVal

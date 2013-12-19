@@ -44,7 +44,7 @@ import (
 const mainConfig = `
 {
 	"http://127.0.0.1:5000":{
-	 "proxy":false,
+	 "proxy":"",
 	 "matches":{
 		 "/test1":{"route":"(.*)|$1"},
 		 "/test2":{"route":"/test2(.*)|/redirect2$1"},
@@ -52,17 +52,17 @@ const mainConfig = `
 		 "/":{"route":"(.$)|$1"}
      }},
 	"http://nominatim.openstreetmap.org/":{
-	 "proxy":true,
+	 "proxy":"",
 	 "matches":{
 		 "/nominatim":{"route":"/nominatim(.*)|$1"}
      }},
     "http://api.geonames.org":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/geonames":{"route":"/geonames(.*)|$1"}
 	}},
 	"ws://127.0.0.1:5100":{
-	 "proxy":false,
+	 "proxy":"",
 	 "matches":{
 		 "/wws":{"route":"(.*)|$1"}
 	 }}
@@ -71,10 +71,10 @@ const mainConfig = `
 const clientConfig = `
 {
 	"http://nominatim.openstreetmap.org/":{
-	 "proxy":false
+	 "proxy":""
      },
     "http://api.geonames.org":{
-	"proxy":true
+	"proxy":""
     },
 	"ws://127.0.0.1:5100":{
 }

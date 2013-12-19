@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -84,35 +83,31 @@ func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 	proxy := flags.Lookup("proxy").Value.String()
 	if len(proxy) > 0 {
 		s.proxy = &proxy
-	} else {
-		s.proxy, err = findProxy()
-		if err != nil {
-			return nil, err
-		}
 	}
 	log.Println("\tproxy:", proxy)
 	return s, nil
 }
 
-// This attempts to find the proxy configuration for this machine from the registry
-func findProxy() (proxy *string, err error) {
-	path, err := exec.LookPath("reg")
-	if err != nil {
-		return nil, err
-	}
-	out, err := exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable").Output()
-	if err != nil {
-		return nil, err
-	}
-	if strings.Contains(string(out[:]), "0x0") {
-		return nil, nil
-	}
-	out, err = exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer").Output()
-	vals := strings.Split(string(out[:]), " ")
-	proxystr := strings.TrimSpace(vals[len(vals)-1])
-	proxy = &proxystr
-	return proxy, nil
-}
+// This attempts to find the proxy configuration for this machine from the registry.
+// This does not seem to work without elevated rights - will leave it here until solution is found.
+//func findProxy() (proxy *string, err error) {
+//	path, err := exec.LookPath("reg")
+//	if err != nil {
+//		return nil, err
+//	}
+//	out, err := exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable").Output()
+//	if err != nil {
+//		return nil, err
+//	}
+//	if strings.Contains(string(out[:]), "0x0") {
+//		return nil, nil
+//	}
+//	out, err = exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer").Output()
+//	vals := strings.Split(string(out[:]), " ")
+//	proxystr := strings.TrimSpace(vals[len(vals)-1])
+//	proxy = &proxystr
+//	return proxy, nil
+//}
 
 // Run the server
 func (s *Server) ListenAndServe() error {
@@ -176,7 +171,7 @@ The body part of both requests and responses are implemented as Readers, thus al
 to be copied directly down the sockets, negating the requirement to have a buffer here. This allows all
 http bodies, i.e. chunked, to pass through.
 */
-func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string, proxy bool) {
+func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, proxy string) {
 	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -194,8 +189,15 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
 	actTransport := s.httpClient.Transport.(*http.Transport)
-	if proxy && s.proxy != nil {
-		proxyurl, err := url.Parse("http://" + *s.proxy)
+	if len(proxy) > 0 {
+		// check for override
+		var proxystr string
+		if s.proxy != nil {
+			proxystr = *s.proxy
+		} else {
+			proxystr = proxy
+		}
+		proxyurl, err := url.Parse("http://" + proxystr)
 		if err != nil {
 			log.Printf("Could not parse proxy")
 		}

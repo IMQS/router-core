@@ -1,6 +1,6 @@
 {
     "http://127.0.0.1:2000":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/assetcap":{"route":"(.*)|$1"},
 	    "/sandbox":{"route":"(.*)|$1"},
@@ -25,47 +25,47 @@
 	    "/":{"route":"(.*)|$1"}
 	}},
     "http://127.0.0.1:2003":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/auth2":{"route":"/auth2(.*)|$1"}
 	}},
     "http://api.geonames.org":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/geonames":{"route":"/geonames(.*)|$1"}
 	}},
     "http://nominatim.openstreetmap.org":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/nominatim":{"route":"/nominatim(.*)|$1"}
 	}},
     "http://127.0.0.1:2004":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/docs":{"route":"/docs(.*)|$1"}
 	}},
     "http://127.0.0.1:2005":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/yellowfin":{"route":"/yellowfin(.*)|$1"}
 	}},
     "http://127.0.0.1:8484":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/realtime":{"route":"/realtime(.*)|/api/realtime$1"}
 	}},
     "http://10.10.129.10:8085":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/historian":{"route":"(.*)|$1"}
 	}},
     "http://127.0.0.1:8081":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/wlp":{"route":"/wlp(.*)|/wws$1"}
 	}},
     "ws://127.0.0.1:8081":{
-	"proxy":false,
+	"proxy":"",
 	"matches":{
 	    "/wws":{"route":"(.*)|$1"}
 	}}
