@@ -90,6 +90,7 @@ func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 			return nil, err
 		}
 	}
+	log.Println("\tproxy:", proxy)
 	return s, nil
 }
 
