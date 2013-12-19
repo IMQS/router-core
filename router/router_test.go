@@ -27,39 +27,58 @@ requires a working internet connection to pass.
 import (
 	"bytes"
 	"code.google.com/p/go.net/websocket"
+	"flag"
 	"fmt"
 	"html"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-const testConfig = `
-[
-	{"target":"127.0.0.1:5000",
-	 "scheme":"http",
-	 "matches":[
-		 {"match":"/test1","route":"(.*)|$1", "proxy":""},
-		 {"match":"/test2","route":"/test2(.*)|/redirect2$1", "proxy":""},
-		 {"match":"/test3","route":"/test3(.*)|$1", "proxy":""},
-		 {"match":"/","route":"(.$)|$1", "proxy":""}
-     ]},
-	{"target":"nominatim.openstreetmap.org/",
-	 "scheme":"http",
-	 "matches":[
-		 {"match":"/nominatim","route":"/nominatim(.*)|$1", "proxy":""}
-     ]},
-	{"target":"127.0.0.1:5100",
-	 "scheme":"ws",
-	 "matches":[
-		 {"match":"/wws","route":"(.*)|$1", "proxy":""}
-	 ]}
-]
+const mainConfig = `
+{
+	"http://127.0.0.1:5000":{
+	 "proxy":false,
+	 "matches":{
+		 "/test1":{"route":"(.*)|$1"},
+		 "/test2":{"route":"/test2(.*)|/redirect2$1"},
+		 "/test3":{"route":"/test3(.*)|$1"},
+		 "/":{"route":"(.$)|$1"}
+     }},
+	"http://nominatim.openstreetmap.org/":{
+	 "proxy":true,
+	 "matches":{
+		 "/nominatim":{"route":"/nominatim(.*)|$1"}
+     }},
+    "http://api.geonames.org":{
+	"proxy":false,
+	"matches":{
+	    "/geonames":{"route":"/geonames(.*)|$1"}
+	}},
+	"ws://127.0.0.1:5100":{
+	 "proxy":false,
+	 "matches":{
+		 "/wws":{"route":"(.*)|$1"}
+	 }}
+}
+`
+const clientConfig = `
+{
+	"http://nominatim.openstreetmap.org/":{
+	 "proxy":false
+     },
+    "http://api.geonames.org":{
+	"proxy":true
+    },
+	"ws://127.0.0.1:5100":{
+}
+}
 `
 
 // We still need to figure out a way to kill the server gracefully.
@@ -74,7 +93,7 @@ type sandbox struct {
 	backWaiter  chan error
 }
 
-var singleSandbox *sandbox
+var singleSandbox *sandbox = nil
 
 func (s *sandbox) start(t *testing.T) {
 	if t != nil {
@@ -86,20 +105,28 @@ func (s *sandbox) start(t *testing.T) {
 	s.backWaiter = goLaunchWaiter(s.back.listenAndServe)
 	var err error
 	var routeConfig *RouterConfig
-	if routeConfig, err = ParseRoutes(strings.NewReader(testConfig)); err != nil {
+	if routeConfig, err = ParseRoutes(strings.NewReader(mainConfig), strings.NewReader(clientConfig)); err != nil {
 		if t != nil {
 			t.Error(err)
 		}
 	}
-	if s.front, err = NewServer(routeConfig); err != nil {
+	flags := flag.NewFlagSet("router", flag.ExitOnError)
+	flags.String("accesslog", "router_access.log", "access log file")
+	flags.String("errorlog", "router_error.log", "error log file")
+	flags.String("proxy", "", "proxy server:port")
+	flags.Bool("disablekeepalive", false, "Disable Keep Alives")
+	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
+	flags.Uint("responseheadertimeout", 60, "Header Timeout")
+	flags.Parse(os.Args[2:])
+	if s.front, err = NewServer(routeConfig, flags); err != nil {
 		if t != nil {
 			t.Error(err)
 		}
 	}
-	s.front.HttpServer.Addr = ":80"
+	s.front.HttpServer.Addr = ":5002"
 	s.frontWaiter = goLaunchWaiter(s.front.ListenAndServe)
 	if t != nil {
-		//t.Log("Sandbox started")
+		t.Log("Sandbox started")
 	}
 }
 
@@ -120,7 +147,7 @@ func (s *sandbox) stop(t *testing.T) {
 func startSandbox(t *testing.T) *sandbox {
 	if useSingleSandbox {
 		if singleSandbox == nil {
-			singleSandbox := &sandbox{}
+			singleSandbox = &sandbox{}
 			singleSandbox.start(t)
 		}
 		return singleSandbox
@@ -135,7 +162,7 @@ func TestSimple(t *testing.T) {
 	sb := startSandbox(t)
 	const expected = "Method GET URL /test1 BODY "
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1/test1")
+	resp, err := client.Get("http://127.0.0.1:5002/test1")
 	if err != nil {
 		t.Error(err)
 	}
@@ -145,7 +172,7 @@ func TestSimple(t *testing.T) {
 	}
 	resp.Body.Close()
 	if !bytes.Equal(body, []byte(expected)) {
-		t.Errorf("Expected %s received %s", expected, body)
+		t.Errorf("Expected %s received \"%s\"", expected, body)
 	}
 	sb.stop(t)
 }
@@ -154,7 +181,7 @@ func TestLongURL(t *testing.T) {
 	sb := startSandbox(t)
 	const expected = "Method GET URL /test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/ BODY "
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1/test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/")
+	resp, err := client.Get("http://127.0.0.1:5002/test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/")
 	if err != nil {
 		t.Error(err)
 	}
@@ -173,7 +200,7 @@ func TestNotProxied(t *testing.T) {
 	sb := startSandbox(t)
 	const expected = "Not Found\n"
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1/gert/jan/piet")
+	resp, err := client.Get("http://127.0.0.1:5002/gert/jan/piet")
 	if err != nil {
 		t.Error(err)
 	}
@@ -192,7 +219,7 @@ func TestReplaceBaseUrl(t *testing.T) {
 	sb := startSandbox(t)
 	const expected = "Method GET URL /redirect2/path1/path2 BODY "
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1/test2/path1/path2")
+	resp, err := client.Get("http://127.0.0.1:5002/test2/path1/path2")
 	if err != nil {
 		t.Error(err)
 	}
@@ -211,7 +238,7 @@ func TestRemoveBaseUrl(t *testing.T) {
 	sb := startSandbox(t)
 	const expected = "Method GET URL /and/some/other/path/elements BODY "
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1/test3/and/some/other/path/elements")
+	resp, err := client.Get("http://127.0.0.1:5002/test3/and/some/other/path/elements")
 	if err != nil {
 		t.Error(err)
 	}
@@ -231,7 +258,7 @@ var externalExpected = `[{"place_id":"8072499","licence":"Data \u00a9 OpenStreet
 func TestHostReplace(t *testing.T) {
 	sb := startSandbox(t)
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1/nominatim/search/TechnoPark,+Stellenbosch?format=json")
+	resp, err := client.Get("http://127.0.0.1:5002/nominatim/search/TechnoPark,+Stellenbosch?format=json")
 	if err != nil {
 		t.Error(err)
 	}
@@ -251,7 +278,7 @@ func TestBody(t *testing.T) {
 	sb := startSandbox(t)
 	const expected = "Method GET URL /test1/testbody BODY SomeBodyText"
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://127.0.0.1/test1/testbody", strings.NewReader("SomeBodyText"))
+	req, err := http.NewRequest("GET", "http://127.0.0.1:5002/test1/testbody", strings.NewReader("SomeBodyText"))
 	if err != nil {
 		t.Error(err)
 	}
@@ -281,7 +308,7 @@ func TestMethods(t *testing.T) {
 		"Method PUT URL /test1/testbody BODY SomeBodyText"}
 	client := &http.Client{}
 	for index, method := range methods {
-		req, err := http.NewRequest(method, "http://127.0.0.1/test1/testbody", strings.NewReader("SomeBodyText"))
+		req, err := http.NewRequest(method, "http://127.0.0.1:5002/test1/testbody", strings.NewReader("SomeBodyText"))
 		if err != nil {
 			t.Error(err)
 		}
@@ -317,7 +344,7 @@ func TestManyClientSingleRequest(t *testing.T) {
 				DisableKeepAlives: true,
 			},
 		}
-		resp, err := client.Get("http://127.0.0.1/test2/path1/path2")
+		resp, err := client.Get("http://127.0.0.1:5002/test2/path1/path2")
 		if err != nil {
 			t.Error(err)
 		}
@@ -348,7 +375,7 @@ func TestSingleClientManyRequests(t *testing.T) {
 	many := func(t *testing.T) {
 		defer clientGroup.Done()
 		const expected = "/redirect2/path1/path2"
-		resp, err := client.Get("http://127.0.0.1/test2/path1/path2")
+		resp, err := client.Get("http://127.0.0.1:5002/test2/path1/path2")
 		if err != nil {
 			t.Error(err)
 		}
@@ -375,7 +402,7 @@ func TestWebsocket(t *testing.T) {
 	go wsserver(t)
 	time.Sleep(0.5 * 1e9) // Time for server to start
 	origin := "http://localhost/"
-	url := "ws://127.0.0.1:80/wws"
+	url := "ws://127.0.0.1:5002/wws"
 	ws, err := websocket.Dial(url, "", origin)
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/IMQS/router-core/router"
 	"log"
@@ -20,34 +21,27 @@ func realMain() (result int) {
 			fmt.Printf("%v\n", err)
 		}
 	}()
-	args := os.Args[1:]
-	if len(args) == 0 {
-		showHelp()
-		return 0
-	}
 
-	configpath := ""
-	arg := args[0]
-	if arg[0:2] == "-c" {
-		configpath = args[1]
-	}
-
-	if configpath == "" {
-		showHelp()
-		return 0
-	}
-
-	configfile, err := os.Open(configpath)
-	if err != nil {
-		panic("Unable to open config file: " + err.Error())
+	flags := flag.NewFlagSet("router", flag.ExitOnError)
+	flags.String("accesslog", "c:\\imqsvar\\logs\\router_access.log", "access log file")
+	flags.String("errorlog", "c:\\imqsvar\\logs\\router_error.log", "error log file")
+	flags.String("mainconfig", "c:\\imqsbin\\bin\\router_config.json", "main config file for router")
+	flags.String("clientconfig", "c:\\imqsbin\\conf\\router_config.json", "client specific overrides config file for router")
+	flags.String("proxy", "", "proxy server:port to use")
+	flags.Bool("disablekeepalive", false, "Disable Keep Alives")
+	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
+	flags.Uint("responseheadertimeout", 60, "Header Timeout")
+	if len(os.Args) > 1 {
+		flags.Parse(os.Args[1:])
 	}
 
 	handler := func() error {
-		config, errCfg := router.ParseRoutes(configfile)
+		config, errCfg := router.ParseRoutes(flags.Lookup("mainconfig").Value.String(),
+			flags.Lookup("clientconfig").Value.String())
 		if errCfg != nil {
 			return errCfg
 		}
-		server, err := router.NewServer(config)
+		server, err := router.NewServer(config, flags)
 		if err != nil {
 			return err
 		}
@@ -72,9 +66,4 @@ func realMain() (result int) {
 		result = 1
 	}
 	return
-}
-
-func showHelp() {
-	help := `imqsrouter -c configfile`
-	fmt.Print(help)
 }

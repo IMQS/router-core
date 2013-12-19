@@ -2,6 +2,7 @@ package router
 
 import (
 	"code.google.com/p/go.net/websocket"
+	"flag"
 	"github.com/cespare/go-apachelog"
 	"io"
 	"log"
@@ -9,7 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,25 +30,40 @@ type Server struct {
 	listener    net.Listener
 	waiter      sync.WaitGroup
 	filechecker *regexp.Regexp
+	proxy       *string
 }
 
 /*
 NewServer creates a new server instance; starting up logging and creating a routing instance.
 */
-func NewServer(config *RouterConfig) (*Server, error) {
-	file, err := os.OpenFile("c:\\imqsvar\\logs\\router.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
+	file, err := os.OpenFile(flags.Lookup("accesslog").Value.String(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{}
 	s.HttpServer = &http.Server{}
 	s.HttpServer.Handler = apachelog.NewHandler(s, file)
+	var httpTransport *http.Transport
 
-	httpTransport := &http.Transport{
-		DisableKeepAlives:     false,
-		MaxIdleConnsPerHost:   50,
+	dka, err := strconv.ParseBool(flags.Lookup("disablekeepalive").Value.String())
+	if err != nil {
+		return nil, err
+	}
+	mic, err := strconv.ParseUint(flags.Lookup("maxidleconnections").Value.String(), 0, 8)
+	if err != nil {
+		return nil, err
+	}
+	rht, err := strconv.ParseUint(flags.Lookup("responseheadertimeout").Value.String(), 0, 8)
+	if err != nil {
+		return nil, err
+	}
+
+	httpTransport = &http.Transport{
+		DisableKeepAlives:     dka,
+		MaxIdleConnsPerHost:   int(mic),
 		DisableCompression:    true,
-		ResponseHeaderTimeout: time.Second * 60,
+		ResponseHeaderTimeout: time.Second * time.Duration(rht),
 	}
 	s.httpClient = &http.Client{
 		Transport: httpTransport,
@@ -52,13 +71,46 @@ func NewServer(config *RouterConfig) (*Server, error) {
 	if s.router, err = NewRouter(config); err != nil {
 		return nil, err
 	}
-	if file, err = os.OpenFile("c:\\imqsvar\\logs\\router_server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm); err != nil {
+	if file, err = os.OpenFile(flags.Lookup("errorlog").Value.String(),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm); err != nil {
 		return nil, err
 	}
 	log.SetOutput(file)
-	log.Println("Starting v0.00")
+	log.Println("Starting v0.01 with:")
+	log.Println("\tDisableKeepAlives:", flags.Lookup("disablekeepalive").Value.String())
+	log.Println("\tMaxIdleConnsPerHost:", flags.Lookup("maxidleconnections").Value.String())
+	log.Println("\tResponseHeaderTimeout:", flags.Lookup("responseheadertimeout").Value.String())
 	s.filechecker = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
+	proxy := flags.Lookup("proxy").Value.String()
+	if len(proxy) > 0 {
+		s.proxy = &proxy
+	} else {
+		s.proxy, err = findProxy()
+		if err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
+}
+
+// This attempts to find the proxy configuration for this machine from the registry
+func findProxy() (proxy *string, err error) {
+	path, err := exec.LookPath("reg")
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable").Output()
+	if err != nil {
+		return nil, err
+	}
+	if strings.Contains(string(out[:]), "0x0") {
+		return nil, nil
+	}
+	out, err = exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer").Output()
+	vals := strings.Split(string(out[:]), " ")
+	proxystr := strings.TrimSpace(vals[len(vals)-1])
+	proxy = &proxystr
+	return proxy, nil
 }
 
 // Run the server
@@ -75,7 +127,7 @@ func (s *Server) ListenAndServe() error {
 		}
 		err = s.HttpServer.Serve(s.listener)
 		if err != nil {
-			if err.Error() == "AcceptEx tcp [::]:80: The specified network name is no longer available." {
+			if strings.Contains(err.Error(), "specified network name is no longer available") {
 				log.Println("Restarting Error 64")
 			} else {
 				break
@@ -123,7 +175,7 @@ The body part of both requests and responses are implemented as Readers, thus al
 to be copied directly down the sockets, negating the requirement to have a buffer here. This allows all
 http bodies, i.e. chunked, to pass through.
 */
-func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, proxy string) {
+func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string, proxy bool) {
 	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -141,16 +193,16 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
 	actTransport := s.httpClient.Transport.(*http.Transport)
-	if proxy != "" {
-		proxyurl, err := url.Parse("http://" + proxy)
+	if proxy && s.proxy != nil {
+		proxyurl, err := url.Parse("http://" + *s.proxy)
 		if err != nil {
 			log.Printf("Could not parse proxy")
 		}
 		actTransport.Proxy = http.ProxyURL(proxyurl)
+		log.Println("Using Proxy:", actTransport.Proxy)
 	} else {
 		actTransport.Proxy = nil
 	}
-	log.Println(actTransport.Proxy)
 	resp, e := s.httpClient.Do(cleaned)
 	if e != nil {
 		http.Error(w, e.Error(), http.StatusGatewayTimeout)

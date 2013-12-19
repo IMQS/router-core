@@ -2,9 +2,11 @@ package router
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -15,12 +17,12 @@ type route struct {
 	scheme  string
 	host    string
 	replace string
-	proxy   string
+	proxy   bool
 	re      *regexp.Regexp
 }
 
 // Rewrite an incoming URL, so that it is ready to be dispatched to a backend service
-func (r *route) generate(req *http.Request) (urlstr, scheme, proxy string) {
+func (r *route) generate(req *http.Request) (urlstr, scheme string, proxy bool) {
 	url := new(url.URL)
 	*url = *req.URL
 	url.Scheme = r.scheme
@@ -40,28 +42,17 @@ type routeSet struct {
 type Router interface {
 	// Rewrite an incoming request. The returned value 'routed' is true if the Router was
 	// able to process the request.
-	ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool)
+	ProcessRoute(req *http.Request) (newurl, scheme string, proxy, routed bool)
 }
 
-func (r *routeSet) ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool) {
+func (r *routeSet) ProcessRoute(req *http.Request) (newurl, scheme string, proxy, routed bool) {
 	re := r.re.FindString(req.RequestURI)
 	generator, ok := r.routes[re]
 	if !ok {
-		return req.RequestURI, "http", "", false
+		return req.RequestURI, "http", false, false
 	}
 	newurl, scheme, proxy = generator.generate(req)
 	return newurl, scheme, proxy, true
-}
-
-// Top-level configuration of a router
-type RouterConfig []struct {
-	Matches []struct {
-		Match string `json:"match"` // /assetcap
-		Route string `json:"route"`
-		Proxy string `json:"proxy"`
-	} `json:"matches"`
-	Target string `json:"target"` // http://127.0.0.1:2000/
-	Scheme string `json:"scheme"`
 }
 
 // Turn a configuration into a runnable Router
@@ -77,17 +68,19 @@ func NewRouter(config *RouterConfig) (router Router, err error) {
 	routeset.routes = make(map[string]*route)
 	routeset.re = regexp.MustCompile("^(/\\w*)/??")
 
-	for _, target := range *config {
-		for _, match := range target.Matches {
+	for target, conf := range *config {
+		for path, match := range conf.Matches {
 			parts := strings.Split(match.Route, "|")
+			scheme := target[:strings.Index(target, ":")]
+			host := target[strings.Index(target, "//")+2:]
 			route := &route{}
-			route.match = match.Match
-			route.scheme = target.Scheme
-			route.host = target.Target
+			route.match = path
+			route.scheme = scheme
+			route.host = host
 			route.replace = parts[1]
-			route.proxy = match.Proxy
+			route.proxy = conf.Proxy
 			route.re = regexp.MustCompile(parts[0])
-			routeset.routes[match.Match] = route
+			routeset.routes[path] = route
 		}
 	}
 
@@ -140,11 +133,70 @@ In the example above the following will happen assuming router is deployed on po
 	ws://server/wws                              -> ws://server3:9000/wws
 
 */
-func ParseRoutes(configReader io.Reader) (*RouterConfig, error) {
-	config := &RouterConfig{}
-	decoder := json.NewDecoder(configReader)
-	if err := decoder.Decode(config); err != nil {
+type Routes map[string]struct {
+	Route string `json:"route"`
+}
+
+// Top-level configuration of a router
+type RouterConfig map[string]struct {
+	Proxy   bool `json:"proxy"`
+	Matches Routes
+}
+
+func mergeConfigs(dst, src *RouterConfig) error {
+	for key, srcVal := range *src {
+		if dstVal, ok := (*dst)[key]; ok {
+			// Have same target merge src into dst, for now only proxy and new routes
+			fmt.Printf("for %s from %q to %q\n", key, dstVal.Proxy, srcVal.Proxy)
+			if proxy := srcVal.Proxy; proxy {
+				dstVal.Proxy = proxy
+			}
+			(*dst)[key] = dstVal
+		}
+	}
+	return nil
+}
+
+func mergeMatches(dst, src Routes) {
+
+}
+
+func ParseRoutes(mainConfig, clientConfig interface{}) (*RouterConfig, error) {
+	main, err := parseRoute(mainConfig)
+	if err != nil {
 		return nil, err
 	}
-	return config, nil
+
+	client, err := parseRoute(clientConfig)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	if !os.IsNotExist(err) {
+		mergeConfigs(main, client)
+	}
+
+	return main, nil
+}
+
+func parseRoute(config interface{}) (*RouterConfig, error) {
+	var reader io.Reader
+	var err error
+	switch config.(type) {
+	case io.Reader:
+		reader = config.(io.Reader)
+	case string:
+		file, err := os.Open(config.(string))
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		reader = file
+	}
+	result := &RouterConfig{}
+	decoder := json.NewDecoder(reader)
+	if err = decoder.Decode(result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
