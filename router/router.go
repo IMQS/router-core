@@ -2,7 +2,6 @@ package router
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -147,7 +146,6 @@ func mergeConfigs(dst, src *RouterConfig) error {
 	for key, srcVal := range *src {
 		if dstVal, ok := (*dst)[key]; ok {
 			// Have same target merge src into dst, for now only proxy and new routes
-			fmt.Printf("for %s from %q to %q\n", key, dstVal.Proxy, srcVal.Proxy)
 			if proxy := srcVal.Proxy; proxy {
 				dstVal.Proxy = proxy
 			}

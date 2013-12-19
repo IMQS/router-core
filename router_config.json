@@ -30,12 +30,12 @@
 	    "/auth2":{"route":"/auth2(.*)|$1"}
 	}},
     "http://api.geonames.org":{
-	"proxy":"proxy.vitens.lan:8080",
+	"proxy":false,
 	"matches":{
 	    "/geonames":{"route":"/geonames(.*)|$1"}
 	}},
     "http://nominatim.openstreetmap.org":{
-	"proxy":"proxy.vitens.lan:8080",
+	"proxy":false,
 	"matches":{
 	    "/nominatim":{"route":"/nominatim(.*)|$1"}
 	}},
