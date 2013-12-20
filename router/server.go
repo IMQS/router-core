@@ -32,9 +32,8 @@ type Server struct {
 	proxy       *string
 }
 
-/*
-NewServer creates a new server instance; starting up logging and creating a routing instance.
-*/
+
+// NewServer creates a new server instance; starting up logging and creating a routing instance.
 func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 	file, err := os.OpenFile(flags.Lookup("accesslog").Value.String(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {

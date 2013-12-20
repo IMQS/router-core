@@ -90,35 +90,27 @@ func NewRouter(config *RouterConfig) (router Router, err error) {
 Reads and parse a routing config file, and return a new Router object.
 
 An example config file:
-
-	[
-		{
-			"target": "server1",
-			"scheme": "http",
-			"matches": [
-				{"match": "/s1p1", "route": "(.*)|$1"},
-				{"match": "/s1p2", "route": "(.*)|$1"},
-				{"match": "/s1p3", "route": "(.*)|$1"},
-			]
-		},
-		{
-			"target": "server2",
-			"scheme": "http",
-			"matches": [
-				{"match": "/s2p1", "route": "/s2p1(.*)|/newpath1$1"},
-				{"match": "/s2p2", "route": "/s2p2(.*)|$1"},
-				{"match": "/s2p3", "route": "(.*)|$1"}
-			]
-		},
-		{
-			"target": "server3:9000",
-			"scheme": "ws",
-			"matches": [
-				{"match": "/wws", "route":"(.*)|$1"}
-			]
-		}
-	]
-
+{
+	"http://server1":{
+		"proxy":"",
+		"matches":{
+			"/s1p1":{"route":"(.*)|$1"},
+			"/s1p2":{"route":"(.*)|$1"},
+			"/s1p3":{"route":"(.*)|$1"}
+		}},
+	"http://server2":{
+		"proxy":"",
+		"matches":{
+			"/s2p1":{"route":"/s2p1(.*)|/newpath$1"},
+			"/s2p2":{"route":"/s2p2(.*)|$1"},
+			"/s2p3":{"route":"(.*)|$1"}
+		}},
+	"ws://server3:9000":{
+		"proxy":"",
+		"matches":{
+			"/wws":{"route":"(.*)|/$1"}
+		}}
+}
 In the example above the following will happen assuming router is deployed on port 80 on server "server":
 
 	http://server/s1p1                           -> http://server1/s1p1
@@ -156,9 +148,10 @@ func mergeConfigs(dst, src *RouterConfig) error {
 }
 
 func mergeMatches(dst, src Routes) {
-
+	// ToDo
 }
 
+// Updated to have a global config file and a client specific file. The global config file gets overriden by the client config file.
 func ParseRoutes(mainConfig, clientConfig interface{}) (*RouterConfig, error) {
 	main, err := parseRoute(mainConfig)
 	if err != nil {
