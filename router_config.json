@@ -44,7 +44,7 @@
 	"matches":{
 	    "/docs":{"route":"/docs(.*)|$1"}
 	}},
-    "http://127.0.0.1:2005":{
+    "http://127.0.0.1:2005/yellowfin":{
 	"proxy":"",
 	"matches":{
 	    "/yellowfin":{"route":"/yellowfin(.*)|$1"}
