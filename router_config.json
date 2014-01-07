@@ -44,10 +44,10 @@
 	"matches":{
 	    "/docs":{"route":"/docs(.*)|$1"}
 	}},
-    "http://127.0.0.1:2005/yellowfin":{
+    "http://127.0.0.1:2005":{
 	"proxy":"",
 	"matches":{
-	    "/yellowfin":{"route":"/yellowfin(.*)|$1"}
+	    "/yellowfin":{"route":"(.*)|$1"}
 	}},
     "http://127.0.0.1:8484":{
 	"proxy":"",
