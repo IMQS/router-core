@@ -32,7 +32,6 @@ type Server struct {
 	proxy       *string
 }
 
-
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
 func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 	file, err := os.OpenFile(flags.Lookup("accesslog").Value.String(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
@@ -86,27 +85,6 @@ func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 	log.Println("\tproxy:", proxy)
 	return s, nil
 }
-
-// This attempts to find the proxy configuration for this machine from the registry.
-// This does not seem to work without elevated rights - will leave it here until solution is found.
-//func findProxy() (proxy *string, err error) {
-//	path, err := exec.LookPath("reg")
-//	if err != nil {
-//		return nil, err
-//	}
-//	out, err := exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable").Output()
-//	if err != nil {
-//		return nil, err
-//	}
-//	if strings.Contains(string(out[:]), "0x0") {
-//		return nil, nil
-//	}
-//	out, err = exec.Command(path, "query", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer").Output()
-//	vals := strings.Split(string(out[:]), " ")
-//	proxystr := strings.TrimSpace(vals[len(vals)-1])
-//	proxy = &proxystr
-//	return proxy, nil
-//}
 
 // Run the server
 func (s *Server) ListenAndServe() error {
@@ -222,7 +200,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 }
 
 /*
-forwardWebsocket does for websockets what forwardHTTP does for http requests. A new socket connection is made to the backend and messages are both ways.
+forwardWebsocket does for websockets what forwardHTTP does for http requests. A new socket connection is made to the backend and messages are forwarded both ways.
 */
 func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newurl string) {
 
@@ -230,34 +208,43 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 		origin := "http://localhost"
 		config, errCfg := websocket.NewConfig(newurl, origin)
 		if errCfg != nil {
-			//fmt.Printf("Error with config: %v\n", errCfg.Error())
+			log.Printf("Error with config: %v\n", errCfg.Error())
 			return
 		}
 		backend, errOpen := websocket.DialConfig(config)
 		if errOpen != nil {
-			//fmt.Printf("Error with websocket.DialConfig: %v\n", errOpen.Error())
+			log.Printf("Error with websocket.DialConfig: %v\n", errOpen.Error())
 			return
 		}
+		copy := func(fromSocket *websocket.Conn, toSocket *websocket.Conn, toBackend bool, done chan bool) {
 
-		copy := func(fromSocket *websocket.Conn, toSocket *websocket.Conn, done chan bool) {
 			for {
-				var msg string
-				if e := websocket.Message.Receive(fromSocket, &msg); e != nil && e != io.EOF {
-					log.Printf("Closing connection. Error on fromSocket.Receive (%v)\n", e)
+				var data string
+				var err error
+				err = websocket.Message.Receive(fromSocket, &data)
+				if err == io.EOF {
+					log.Printf("Closing connection. EOF")
+					fromSocket.Close()
+					toSocket.Close()
 					break
 				}
-				if e := websocket.Message.Send(toSocket, msg); e != nil {
-					log.Printf("Closing connection. Error on toSocket.Send (%v)\n", e)
+				if err != nil && err != io.EOF {
+					break
+				}
+				if e := websocket.Message.Send(toSocket, data); e != nil {
 					break
 				}
 			}
-			log.Println(fromSocket)
+
 			done <- true
 		}
-		finished := make(chan bool)
-		go copy(con, backend, finished)
-		go copy(backend, con, finished)
-		<-finished
+
+		tobackend := make(chan bool)
+		go copy(con, backend, true, tobackend)
+		frombackend := make(chan bool)
+		go copy(backend, con, false, frombackend)
+		<-tobackend
+		<-frombackend
 	}
 
 	wsServer := &websocket.Server{}
