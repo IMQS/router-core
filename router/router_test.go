@@ -51,7 +51,7 @@ const mainConfig = `
 		 "/test3":{"route":"/test3(.*)|$1"},
 		 "/":{"route":"(.$)|$1"}
      }},
-	"http://nominatim.openstreetmap.org/":{
+	"http://nominatim.openstreetmap.org":{
 	 "proxy":"",
 	 "matches":{
 		 "/nominatim":{"route":"/nominatim(.*)|$1"}
@@ -70,7 +70,7 @@ const mainConfig = `
 `
 const clientConfig = `
 {
-	"http://nominatim.openstreetmap.org/":{
+	"http://nominatim.openstreetmap.org":{
 	 "proxy":""
      },
     "http://api.geonames.org":{
@@ -117,7 +117,9 @@ func (s *sandbox) start(t *testing.T) {
 	flags.Bool("disablekeepalive", false, "Disable Keep Alives")
 	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
 	flags.Uint("responseheadertimeout", 60, "Header Timeout")
-	flags.Parse(os.Args[2:])
+	if len(os.Args) > 1 {
+		flags.Parse(os.Args[1:])
+	}
 	if s.front, err = NewServer(routeConfig, flags); err != nil {
 		if t != nil {
 			t.Error(err)
