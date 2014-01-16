@@ -73,7 +73,7 @@ func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 		return nil, err
 	}
 	log.SetOutput(file)
-	log.Println("Starting v0.01 with:")
+	log.Println("Starting v0.02 with:")
 	log.Println("\tDisableKeepAlives:", flags.Lookup("disablekeepalive").Value.String())
 	log.Println("\tMaxIdleConnsPerHost:", flags.Lookup("maxidleconnections").Value.String())
 	log.Println("\tResponseHeaderTimeout:", flags.Lookup("responseheadertimeout").Value.String())
