@@ -23,13 +23,13 @@ var connCount int = 0
 Server used for serving at the router.
 */
 type Server struct {
-	HttpServer  *http.Server
-	httpClient  *http.Client
-	router      Router
-	listener    net.Listener
-	waiter      sync.WaitGroup
-	filechecker *regexp.Regexp
-	proxy       *string
+	HttpServer    *http.Server
+	httpTransport *http.Transport
+	router        Router
+	listener      net.Listener
+	waiter        sync.WaitGroup
+	filechecker   *regexp.Regexp
+	proxy         *string
 }
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
@@ -41,7 +41,6 @@ func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 	s := &Server{}
 	s.HttpServer = &http.Server{}
 	s.HttpServer.Handler = apachelog.NewHandler(s, file)
-	var httpTransport *http.Transport
 
 	dka, err := strconv.ParseBool(flags.Lookup("disablekeepalive").Value.String())
 	if err != nil {
@@ -56,15 +55,13 @@ func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 		return nil, err
 	}
 
-	httpTransport = &http.Transport{
+	s.httpTransport = &http.Transport{
 		DisableKeepAlives:     dka,
 		MaxIdleConnsPerHost:   int(mic),
 		DisableCompression:    true,
 		ResponseHeaderTimeout: time.Second * time.Duration(rht),
 	}
-	s.httpClient = &http.Client{
-		Transport: httpTransport,
-	}
+
 	if s.router, err = NewRouter(config); err != nil {
 		return nil, err
 	}
@@ -165,7 +162,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	copyheaders(req.Header, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
-	actTransport := s.httpClient.Transport.(*http.Transport)
+
 	if len(proxy) > 0 {
 		// check for override
 		var proxystr string
@@ -178,12 +175,12 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 		if err != nil {
 			log.Printf("Could not parse proxy")
 		}
-		actTransport.Proxy = http.ProxyURL(proxyurl)
-		log.Println("Using Proxy:", actTransport.Proxy)
+		s.httpTransport.Proxy = http.ProxyURL(proxyurl)
+		log.Println("Using Proxy:", s.httpTransport.Proxy)
 	} else {
-		actTransport.Proxy = nil
+		s.httpTransport.Proxy = nil
 	}
-	resp, e := s.httpClient.Do(cleaned)
+	resp, e := s.httpTransport.RoundTrip(cleaned)
 	if e != nil {
 		http.Error(w, e.Error(), http.StatusGatewayTimeout)
 		return
