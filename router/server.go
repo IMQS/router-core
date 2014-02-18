@@ -126,7 +126,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	log.Printf("%s %s %s %s", req.RequestURI, newurl, scheme, proxy)
 	if !routed {
 		// Everything not routed is a NotFound "error"
-		http.Error(w, "Not Found", http.StatusNotFound)
+		http.Error(w, "Route not found", http.StatusNotFound)
 		return
 	}
 	switch scheme {

@@ -32,8 +32,9 @@ func (r *route) generate(req *http.Request) (urlstr, scheme, proxy string) {
 
 // This holds the definition of a bunch of routes
 type routeSet struct {
-	routes map[string]*route
-	re     *regexp.Regexp
+	routes   map[string]*route
+	catchAll *route // Specified by matching "/", this route is executed if no other routes match
+	re       *regexp.Regexp
 }
 
 // The Router interface is responsible for taking an incoming request and rewriting it
@@ -47,6 +48,10 @@ type Router interface {
 func (r *routeSet) ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool) {
 	re := r.re.FindString(req.RequestURI)
 	generator, ok := r.routes[re]
+	if !ok && r.catchAll != nil {
+		ok = true
+		generator = r.catchAll
+	}
 	if !ok {
 		return req.RequestURI, "http", "", false
 	}
@@ -80,6 +85,9 @@ func NewRouter(config *RouterConfig) (router Router, err error) {
 			route.proxy = conf.Proxy
 			route.re = regexp.MustCompile(parts[0])
 			routeset.routes[path] = route
+			if path == "/" {
+				routeset.catchAll = route
+			}
 		}
 	}
 
