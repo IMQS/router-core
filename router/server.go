@@ -151,9 +151,15 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 
+	srcHost := req.Host
+	dstHost := cleaned.Host
+
 	copyheaders := func(src http.Header, dst http.Header) {
 		for k, vv := range src {
 			for _, v := range vv {
+				if k == "Location" {
+					v = strings.Replace(v, dstHost, srcHost, 1)
+				}
 				dst.Add(k, v)
 			}
 		}
