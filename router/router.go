@@ -160,19 +160,10 @@ func mergeMatches(dst, src Routes) {
 }
 
 // Updated to have a global config file and a client specific file. The global config file gets overriden by the client config file.
-func ParseRoutes(mainConfig, clientConfig interface{}) (*RouterConfig, error) {
+func ParseRoutes(mainConfig interface{}) (*RouterConfig, error) {
 	main, err := parseRoute(mainConfig)
 	if err != nil {
 		return nil, err
-	}
-
-	client, err := parseRoute(clientConfig)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-
-	if !os.IsNotExist(err) {
-		mergeConfigs(main, client)
 	}
 
 	return main, nil

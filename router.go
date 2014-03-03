@@ -25,8 +25,7 @@ func realMain() (result int) {
 	flags := flag.NewFlagSet("router", flag.ExitOnError)
 	flags.String("accesslog", "c:\\imqsvar\\logs\\router_access.log", "access log file")
 	flags.String("errorlog", "c:\\imqsvar\\logs\\router_error.log", "error log file")
-	flags.String("mainconfig", "c:\\imqsbin\\bin\\router_config.json", "main config file for router")
-	flags.String("clientconfig", "c:\\imqsbin\\conf\\router_config.json", "client specific overrides config file for router")
+	flags.String("mainconfig", "c:\\imqsbin\\conf\\router_config.json", "main config file for router")
 	flags.String("proxy", "", "proxy server:port to use")
 	flags.Bool("disablekeepalive", false, "Disable Keep Alives")
 	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
@@ -36,8 +35,7 @@ func realMain() (result int) {
 	}
 
 	handler := func() error {
-		config, errCfg := router.ParseRoutes(flags.Lookup("mainconfig").Value.String(),
-			flags.Lookup("clientconfig").Value.String())
+		config, errCfg := router.ParseRoutes(flags.Lookup("mainconfig").Value.String())
 		if errCfg != nil {
 			return errCfg
 		}
