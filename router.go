@@ -34,15 +34,17 @@ func realMain() (result int) {
 		flags.Parse(os.Args[1:])
 	}
 
+	config, errCfg := router.ParseRoutes(flags.Lookup("mainconfig").Value.String())
+	if errCfg != nil {
+		panic(errCfg)
+	}
+
+	server, errServer := router.NewServer(config, flags)
+	if errServer != nil {
+		panic(errServer)
+	}
+
 	handler := func() error {
-		config, errCfg := router.ParseRoutes(flags.Lookup("mainconfig").Value.String())
-		if errCfg != nil {
-			return errCfg
-		}
-		server, err := router.NewServer(config, flags)
-		if err != nil {
-			return err
-		}
 		server.HttpServer.Addr = ":80"
 		log.Fatal(server.ListenAndServe())
 		return nil
