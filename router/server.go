@@ -17,8 +17,6 @@ import (
 	"time"
 )
 
-var connCount int = 0
-
 /*
 Server used for serving at the router.
 */
@@ -144,6 +142,17 @@ router "middle man" invisible to incomming connections.
 The body part of both requests and responses are implemented as Readers, thus allowing the body contents
 to be copied directly down the sockets, negating the requirement to have a buffer here. This allows all
 http bodies, i.e. chunked, to pass through.
+
+On the removal of the "Connection: close" header:
+Leaving "Connection: close" is going to instruct the backend to close the HTTP connection
+after a single request, which is in conflict with HTTP keep alive. If s.httpTransport.DisableKeepAlives
+is false, then we DO want to enable keep alives. It might be better to only remove this header
+if s.httpTransport.DisableKeepAlives is true, but it seems prudent to just get rid of it completely.
+
+This issue first became apparent when running the router behind nginx. The backend server behind
+router would react to the "Connection: close" header by closing the TCP connection after
+the response was sent. This would then result in s.httpTransport.RoundTrip(cleaned) returning
+an EOF error when it tried to re-use that TCP connection.
 */
 func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, proxy string) {
 	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
@@ -159,6 +168,10 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 			for _, v := range vv {
 				if k == "Location" {
 					v = strings.Replace(v, dstHost, srcHost, 1)
+				}
+				if k == "Connection" && v == "close" {
+					// See detailed explanation in top-level function comment
+					continue
 				}
 				dst.Add(k, v)
 			}
@@ -188,6 +201,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	}
 	resp, e := s.httpTransport.RoundTrip(cleaned)
 	if e != nil {
+		log.Println("HTTP RoundTrip error: " + e.Error())
 		http.Error(w, e.Error(), http.StatusGatewayTimeout)
 		return
 	}
