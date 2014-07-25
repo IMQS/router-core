@@ -30,7 +30,7 @@ func realMain() (result int) {
 	flags.Bool("disablekeepalive", false, "Disable Keep Alives")
 	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
 	flags.Uint("responseheadertimeout", 60, "Header Timeout")
-	flags.String("port", ":80", "The port on which the router receives traffic")
+	flags.String("port", "80", "The port on which the router receives traffic")
 	if len(os.Args) > 1 {
 		flags.Parse(os.Args[1:])
 	}
@@ -46,7 +46,7 @@ func realMain() (result int) {
 	}
 
 	handler := func() error {
-		server.HttpServer.Addr = flags.Lookup("port").Value.String()
+		server.HttpServer.Addr = (":" + flags.Lookup("port").Value.String())
 		log.Fatal(server.ListenAndServe())
 		return nil
 	}
