@@ -31,6 +31,7 @@ func realMain() (result int) {
 	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
 	flags.Uint("responseheadertimeout", 60, "Header Timeout")
 	flags.String("httpPort", "80", "The port on which the router receives traffic")
+	flags.String("httpPortSecondary", "", "Optional secondary port for http traffic")
 	if len(os.Args) > 1 {
 		flags.Parse(os.Args[1:])
 	}
@@ -46,8 +47,15 @@ func realMain() (result int) {
 	}
 
 	handler := func() error {
-		server.HttpServer.Addr = (":" + flags.Lookup("httpPort").Value.String())
-		log.Fatal(server.ListenAndServe())
+		httpPort := ""
+		httpPortSecondary := ""
+
+		httpPort = ":" + flags.Lookup("httpPort").Value.String()
+		if flags.Lookup("httpPortSecondary").Value.String() != "" {
+			httpPortSecondary = ":" + flags.Lookup("httpPortSecondary").Value.String()
+		}
+
+		log.Fatal(server.ListenAndServe(httpPort, httpPortSecondary))
 		return nil
 	}
 

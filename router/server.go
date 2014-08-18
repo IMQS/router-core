@@ -21,13 +21,14 @@ import (
 Server used for serving at the router.
 */
 type Server struct {
-	HttpServer    *http.Server
-	httpTransport *http.Transport
-	router        Router
-	listener      net.Listener
-	waiter        sync.WaitGroup
-	filechecker   *regexp.Regexp
-	proxy         *string
+	HttpServer        *http.Server
+	httpTransport     *http.Transport
+	router            Router
+	listener          net.Listener
+	listenerSecondary net.Listener
+	waiter            sync.WaitGroup
+	filechecker       *regexp.Regexp
+	proxy             *string
 }
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
@@ -82,25 +83,39 @@ func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
 }
 
 // Run the server
-func (s *Server) ListenAndServe() error {
-	addr := s.HttpServer.Addr
-	if addr == "" {
-		addr = ":http"
+func (s *Server) ListenAndServe(httpPort, httpPortSecondary string) error {
+	if httpPort == "" {
+		httpPort = ":http"
 	}
-	var err error
-	for {
-		if s.listener, err = net.Listen("tcp", addr); err != nil {
-			log.Printf("In Listen error : %s\n", err.Error())
-			return err
-		}
-		err = s.HttpServer.Serve(s.listener)
-		if err != nil {
-			if strings.Contains(err.Error(), "specified network name is no longer available") {
-				log.Println("Restarting Error 64")
-			} else {
+	run := func(listener *net.Listener, port string, done chan error) {
+
+		var err error
+		for {
+			if *listener, err = net.Listen("tcp", port); err != nil {
+				log.Printf("In Listen error : %s\n", err.Error())
 				break
 			}
+			err = s.HttpServer.Serve(*listener)
+			if err != nil {
+				if strings.Contains(err.Error(), "specified network name is no longer available") {
+					log.Println("Restarting Error 64")
+				} else {
+					break
+				}
+			}
 		}
+		done <- err
+	}
+	var err error
+	err1 := make(chan error)
+	go run(&s.listener, httpPort, err1)
+	if httpPortSecondary != "" {
+		err2 := make(chan error)
+		go run(&s.listenerSecondary, httpPortSecondary, err2)
+		err = <-err2
+	}
+	if err == nil {
+		err = <-err1
 	}
 	return err
 }
@@ -273,6 +288,10 @@ func (s *Server) Stop() {
 	log.Println("Shutting down...")
 	if s.listener != nil {
 		s.listener.Close()
+	}
+
+	if s.listenerSecondary != nil {
+		s.listenerSecondary.Close()
 	}
 	s.waiter.Wait()
 }
