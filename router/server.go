@@ -135,6 +135,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
 		return
 	}
+	if len(req.URL.Host) != 0 {
+		log.Printf("Found host %s - closing connection", req.URL.Host)
+		http.Error(w, "", http.StatusTeapot)
+		return
+	}
 	newurl, scheme, proxy, routed := s.router.ProcessRoute(req)
 	log.Printf("%s %s %s %s", req.RequestURI, newurl, scheme, proxy)
 	if !routed {
