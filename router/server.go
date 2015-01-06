@@ -1,9 +1,9 @@
 package router
 
 import (
-	"code.google.com/p/go.net/websocket"
 	"flag"
 	"github.com/cespare/go-apachelog"
+	"golang.org/x/net/websocket"
 	"io"
 	"log"
 	"net"
