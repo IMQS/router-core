@@ -36,10 +36,12 @@ func TestRouteMatching(t *testing.T) {
 			"/no-trailing-slash(.*)": "http://abc.com/555$1",
 			"/abc/long/(.*)": "http://abc.com/long/$1",
 			"/abc/(.*)": "http://abc.com/123/$1",
+			"/static": "http://abc.com/noise",
 			"/(.*)": "http://127.0.0.1/www/$1"
 		}}`)
 
 	verifyRoute(t, rs, "/abc/long/777", "http://abc.com/long/777") // /abc/long/ must match before /abc/ or /
+	verifyRoute(t, rs, "/static", "http://abc.com/noise")          // route with no regex patterns
 	verifyRoute(t, rs, "/abc/xyz/", "http://abc.com/123/xyz/")
 	verifyRoute(t, rs, "/abc/xyz", "http://abc.com/123/xyz")
 	verifyRoute(t, rs, "/abc/", "http://abc.com/123/")

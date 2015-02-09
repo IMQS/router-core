@@ -2,6 +2,7 @@ package router
 
 import (
 	"github.com/cespare/go-apachelog"
+	"github.com/natefinch/lumberjack"
 	"golang.org/x/net/websocket"
 	"io"
 	"log"
@@ -15,13 +16,12 @@ import (
 	"time"
 )
 
-/*
-Server used for serving at the router.
-*/
+// Router Server
 type Server struct {
 	HttpServer        *http.Server
 	httpTransport     *http.Transport
 	router            Router
+	errorLog          *log.Logger
 	listener          net.Listener
 	listenerSecondary net.Listener
 	waiter            sync.WaitGroup
@@ -30,13 +30,16 @@ type Server struct {
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
 func NewServer(config *Config) (*Server, error) {
-	accesslog, err := os.OpenFile(config.AccessLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	s := &Server{}
 	s.HttpServer = &http.Server{}
-	s.HttpServer.Handler = apachelog.NewHandler(s, accesslog)
+	s.HttpServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
+
+	logFlags := log.Ldate | log.Ltime | log.Lmicroseconds
+	errorLog := openLog(config.ErrorLog, os.Stderr)
+	s.errorLog = log.New(errorLog, "", logFlags)
+	log.SetOutput(errorLog)
+	log.SetFlags(logFlags)
 
 	s.httpTransport = &http.Transport{
 		DisableKeepAlives:     config.HTTP.DisableKeepAlive,
@@ -48,15 +51,10 @@ func NewServer(config *Config) (*Server, error) {
 	if s.router, err = NewRouter(config); err != nil {
 		return nil, err
 	}
-	errorlog, err := os.OpenFile(config.ErrorLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
-	if err != nil {
-		return nil, err
-	}
-	log.SetOutput(errorlog)
-	log.Println("Starting v0.03 with:")
-	log.Println("\tDisableKeepAlives:", config.HTTP.DisableKeepAlive)
-	log.Println("\tMaxIdleConnsPerHost:", config.HTTP.MaxIdleConnections)
-	log.Println("\tResponseHeaderTimeout:", config.HTTP.ResponseHeaderTimeout)
+	s.errorLog.Print("Starting v0.03 with:")
+	s.errorLog.Printf(" DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
+	s.errorLog.Printf(" MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
+	s.errorLog.Printf(" ResponseHeaderTimeout: %v", config.HTTP.ResponseHeaderTimeout)
 	s.wsdlMatch = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
 }
@@ -71,13 +69,13 @@ func (s *Server) ListenAndServe(httpPort, httpPortSecondary string) error {
 		var err error
 		for {
 			if *listener, err = net.Listen("tcp", port); err != nil {
-				log.Printf("In Listen error : %s\n", err.Error())
+				s.errorLog.Printf("In Listen error : %s\n", err.Error())
 				break
 			}
 			err = s.HttpServer.Serve(*listener)
 			if err != nil {
 				if strings.Contains(err.Error(), "specified network name is no longer available") {
-					log.Println("Restarting - error 64")
+					s.errorLog.Println("Restarting - error 64")
 				} else {
 					break
 				}
@@ -100,6 +98,16 @@ func (s *Server) ListenAndServe(httpPort, httpPortSecondary string) error {
 	return err
 }
 
+// Detect illegal requests
+func (s *Server) isLegalRequest(req *http.Request) bool {
+	// We were getting a whole lot of requests to the 'telco' server where the hostname was "yahoo.mail.com".
+	if req.URL.Host == "yahoo.mail.com" {
+		s.errorLog.Printf("Illegal hostname (%s) - closing connection", req.URL.Host)
+		return false
+	}
+	return true
+}
+
 /*
 ServeHTTP is the single router access point to the frondoor server. All request are handled in this method.
  It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
@@ -109,22 +117,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.waiter.Add(1)
 	defer s.waiter.Done()
 
-	// NASTY HACK! Doesn't belong here!
+	// HACK! Doesn't belong here!
 	// Catch wsdl here to statically serve.
-	// Will be exanded to serve static files.
 	filename := s.wsdlMatch.FindString(req.RequestURI)
 	if filename != "" {
 		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
 		return
 	}
 
-	if len(req.URL.Host) != 0 {
-		log.Printf("Found host %s - closing connection", req.URL.Host)
+	// Detect malware, DOS, etc
+	if !s.isLegalRequest(req) {
 		http.Error(w, "", http.StatusTeapot)
 		return
 	}
 	newurl, proxy, routed := s.router.ProcessRoute(req)
-	log.Printf("(%v) -> (%v) [%v]", req.RequestURI, newurl, proxy)
+
+	//s.errorLog.Printf("(%v) -> (%v) [%v]", req.RequestURI, newurl, proxy)
+
 	if !routed {
 		// Everything not routed is a NotFound "error"
 		http.Error(w, "Route not found", http.StatusNotFound)
@@ -188,16 +197,16 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	if len(proxy) > 0 {
 		proxyurl, err := url.Parse(proxy)
 		if err != nil {
-			log.Printf("Could not parse proxy")
+			s.errorLog.Printf("Could not parse proxy")
 		}
 		s.httpTransport.Proxy = http.ProxyURL(proxyurl)
-		log.Println("Using Proxy:", s.httpTransport.Proxy)
+		s.errorLog.Println("Using Proxy:", s.httpTransport.Proxy)
 	} else {
 		s.httpTransport.Proxy = nil
 	}
 	resp, e := s.httpTransport.RoundTrip(cleaned)
 	if e != nil {
-		log.Println("HTTP RoundTrip error: " + e.Error())
+		s.errorLog.Println("HTTP RoundTrip error: " + e.Error())
 		http.Error(w, e.Error(), http.StatusGatewayTimeout)
 		return
 	}
@@ -220,12 +229,12 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 		origin := "http://localhost"
 		config, errCfg := websocket.NewConfig(newurl, origin)
 		if errCfg != nil {
-			log.Printf("Error with config: %v\n", errCfg.Error())
+			s.errorLog.Printf("Error with config: %v\n", errCfg.Error())
 			return
 		}
 		backend, errOpen := websocket.DialConfig(config)
 		if errOpen != nil {
-			log.Printf("Error with websocket.DialConfig: %v\n", errOpen.Error())
+			s.errorLog.Printf("Error with websocket.DialConfig: %v\n", errOpen.Error())
 			return
 		}
 		copy := func(fromSocket *websocket.Conn, toSocket *websocket.Conn, toBackend bool, done chan bool) {
@@ -235,7 +244,7 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 				var err error
 				err = websocket.Message.Receive(fromSocket, &data)
 				if err == io.EOF {
-					log.Printf("Closing connection. EOF")
+					s.errorLog.Printf("Closing connection. EOF")
 					fromSocket.Close()
 					toSocket.Close()
 					break
@@ -264,8 +273,20 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 	wsServer.ServeHTTP(w, req)
 }
 
+func openLog(filename string, defaultWriter io.Writer) io.Writer {
+	if filename == "" {
+		return defaultWriter
+	}
+	return &lumberjack.Logger{
+		Filename:   filename,
+		MaxSize:    50, // megabytes
+		MaxBackups: 3,
+		MaxAge:     90, // days
+	}
+}
+
 func (s *Server) Stop() {
-	log.Println("Shutting down...")
+	s.errorLog.Println("Shutting down...")
 	if s.listener != nil {
 		s.listener.Close()
 	}

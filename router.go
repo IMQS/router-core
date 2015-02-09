@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flags"
+	"flag"
 	"fmt"
 	"github.com/IMQS/router-core/router"
 	"log"
@@ -37,26 +37,26 @@ func realMain() (result int) {
 	config := &router.Config{}
 	err := config.LoadFile(*mainconfig)
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("Error loading %v: %v", *mainconfig, err))
 	}
 	if *auxconfig != "" {
 		aux := router.Config{}
 		if err = aux.LoadFile(*auxconfig); err != nil {
-			panic(err)
+			panic(fmt.Errorf("Error loading %v: %v", *auxconfig, err))
 		}
 		config.Overlay(&aux)
 	}
 
-	server, err := router.NewServer(config, flags)
+	server, err := router.NewServer(config)
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("Error starting server: %v", err))
 	}
 
 	handler := func() error {
-		httpPort := fmt.Sprintf(":%v", config.GetPort())
+		httpPort := fmt.Sprintf(":%v", config.HTTP.GetPort())
 		httpPortSecondary := ""
-		if config.SecondaryPort != 0 {
-			httpPortSecondary = fmt.Sprintf(":%v", config.SecondaryPort)
+		if config.HTTP.SecondaryPort != 0 {
+			httpPortSecondary = fmt.Sprintf(":%v", config.HTTP.SecondaryPort)
 		}
 
 		log.Fatal(server.ListenAndServe(httpPort, httpPortSecondary))

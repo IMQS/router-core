@@ -112,7 +112,7 @@ func (c *Config) verify() error {
 				}
 			}
 		} else if parse_scheme(replace) == scheme_unknown {
-			return fmt.Errorf("Unrecognized URL scheme (%v). Must be http://, https:// or ws://", replace)
+			return fmt.Errorf("Unrecognized URL scheme (%v). Must be http:// https:// ws:// or {TARGET}", replace)
 		}
 	}
 	for name, target := range c.Targets {
