@@ -1,7 +1,6 @@
 package router
 
 import (
-	"flag"
 	"github.com/cespare/go-apachelog"
 	"golang.org/x/net/websocket"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,58 +25,39 @@ type Server struct {
 	listener          net.Listener
 	listenerSecondary net.Listener
 	waiter            sync.WaitGroup
-	filechecker       *regexp.Regexp
-	proxy             *string
+	wsdlMatch         *regexp.Regexp // hack for serving static content
 }
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
-func NewServer(config *RouterConfig, flags *flag.FlagSet) (*Server, error) {
-	file, err := os.OpenFile(flags.Lookup("accesslog").Value.String(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+func NewServer(config *Config) (*Server, error) {
+	accesslog, err := os.OpenFile(config.AccessLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{}
 	s.HttpServer = &http.Server{}
-	s.HttpServer.Handler = apachelog.NewHandler(s, file)
-
-	dka, err := strconv.ParseBool(flags.Lookup("disablekeepalive").Value.String())
-	if err != nil {
-		return nil, err
-	}
-	mic, err := strconv.ParseUint(flags.Lookup("maxidleconnections").Value.String(), 0, 8)
-	if err != nil {
-		return nil, err
-	}
-	rht, err := strconv.ParseUint(flags.Lookup("responseheadertimeout").Value.String(), 0, 8)
-	if err != nil {
-		return nil, err
-	}
+	s.HttpServer.Handler = apachelog.NewHandler(s, accesslog)
 
 	s.httpTransport = &http.Transport{
-		DisableKeepAlives:     dka,
-		MaxIdleConnsPerHost:   int(mic),
+		DisableKeepAlives:     config.HTTP.DisableKeepAlive,
+		MaxIdleConnsPerHost:   config.HTTP.MaxIdleConnections,
 		DisableCompression:    true,
-		ResponseHeaderTimeout: time.Second * time.Duration(rht),
+		ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
 	}
 
 	if s.router, err = NewRouter(config); err != nil {
 		return nil, err
 	}
-	if file, err = os.OpenFile(flags.Lookup("errorlog").Value.String(),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm); err != nil {
+	errorlog, err := os.OpenFile(config.ErrorLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+	if err != nil {
 		return nil, err
 	}
-	log.SetOutput(file)
-	log.Println("Starting v0.02 with:")
-	log.Println("\tDisableKeepAlives:", flags.Lookup("disablekeepalive").Value.String())
-	log.Println("\tMaxIdleConnsPerHost:", flags.Lookup("maxidleconnections").Value.String())
-	log.Println("\tResponseHeaderTimeout:", flags.Lookup("responseheadertimeout").Value.String())
-	s.filechecker = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
-	proxy := flags.Lookup("proxy").Value.String()
-	if len(proxy) > 0 {
-		s.proxy = &proxy
-	}
-	log.Println("\tproxy:", proxy)
+	log.SetOutput(errorlog)
+	log.Println("Starting v0.03 with:")
+	log.Println("\tDisableKeepAlives:", config.HTTP.DisableKeepAlive)
+	log.Println("\tMaxIdleConnsPerHost:", config.HTTP.MaxIdleConnections)
+	log.Println("\tResponseHeaderTimeout:", config.HTTP.ResponseHeaderTimeout)
+	s.wsdlMatch = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
 }
 
@@ -87,8 +66,8 @@ func (s *Server) ListenAndServe(httpPort, httpPortSecondary string) error {
 	if httpPort == "" {
 		httpPort = ":http"
 	}
-	run := func(listener *net.Listener, port string, done chan error) {
 
+	run := func(listener *net.Listener, port string, done chan error) {
 		var err error
 		for {
 			if *listener, err = net.Listen("tcp", port); err != nil {
@@ -98,7 +77,7 @@ func (s *Server) ListenAndServe(httpPort, httpPortSecondary string) error {
 			err = s.HttpServer.Serve(*listener)
 			if err != nil {
 				if strings.Contains(err.Error(), "specified network name is no longer available") {
-					log.Println("Restarting Error 64")
+					log.Println("Restarting - error 64")
 				} else {
 					break
 				}
@@ -106,6 +85,7 @@ func (s *Server) ListenAndServe(httpPort, httpPortSecondary string) error {
 		}
 		done <- err
 	}
+
 	var err error
 	err1 := make(chan error)
 	go run(&s.listener, httpPort, err1)
@@ -128,26 +108,29 @@ between these pipes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.waiter.Add(1)
 	defer s.waiter.Done()
+
+	// NASTY HACK! Doesn't belong here!
 	// Catch wsdl here to statically serve.
 	// Will be exanded to serve static files.
-	filename := s.filechecker.FindString(req.RequestURI)
+	filename := s.wsdlMatch.FindString(req.RequestURI)
 	if filename != "" {
 		http.ServeFile(w, req, "C:\\imqsbin\\conf\\"+filename)
 		return
 	}
+
 	if len(req.URL.Host) != 0 {
 		log.Printf("Found host %s - closing connection", req.URL.Host)
 		http.Error(w, "", http.StatusTeapot)
 		return
 	}
-	newurl, scheme, proxy, routed := s.router.ProcessRoute(req)
-	log.Printf("%s %s %s %s", req.RequestURI, newurl, scheme, proxy)
+	newurl, proxy, routed := s.router.ProcessRoute(req)
+	log.Printf("(%v) -> (%v) [%v]", req.RequestURI, newurl, proxy)
 	if !routed {
 		// Everything not routed is a NotFound "error"
 		http.Error(w, "Route not found", http.StatusNotFound)
 		return
 	}
-	switch scheme {
+	switch parse_scheme(newurl) {
 	case "http":
 		s.forwardHttp(w, req, newurl, proxy)
 	case "ws":
@@ -203,14 +186,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	cleaned.ContentLength = req.ContentLength
 
 	if len(proxy) > 0 {
-		// check for override
-		var proxystr string
-		if s.proxy != nil {
-			proxystr = *s.proxy
-		} else {
-			proxystr = proxy
-		}
-		proxyurl, err := url.Parse("http://" + proxystr)
+		proxyurl, err := url.Parse(proxy)
 		if err != nil {
 			log.Printf("Could not parse proxy")
 		}
@@ -240,7 +216,6 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 forwardWebsocket does for websockets what forwardHTTP does for http requests. A new socket connection is made to the backend and messages are forwarded both ways.
 */
 func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newurl string) {
-
 	myHandler := func(con *websocket.Conn) {
 		origin := "http://localhost"
 		config, errCfg := websocket.NewConfig(newurl, origin)

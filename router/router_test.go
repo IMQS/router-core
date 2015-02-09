@@ -25,16 +25,13 @@ requires a working internet connection to pass.
 */
 
 import (
-	"bytes"
-	"code.google.com/p/go.net/websocket"
-	"flag"
 	"fmt"
+	"golang.org/x/net/websocket"
 	"html"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -43,41 +40,22 @@ import (
 
 const mainConfig = `
 {
-	"http://127.0.0.1:5000":{
-	 "proxy":"",
-	 "matches":{
-		 "/test1":{"route":"(.*)|$1"},
-		 "/test2":{"route":"/test2(.*)|/redirect2$1"},
-		 "/test3":{"route":"/test3(.*)|$1"},
-		 "/":{"route":"(.$)|$1"}
-     }},
-	"http://nominatim.openstreetmap.org":{
-	 "proxy":"",
-	 "matches":{
-		 "/nominatim":{"route":"/nominatim(.*)|$1"}
-     }},
-    "http://api.geonames.org":{
-	"proxy":"",
-	"matches":{
-	    "/geonames":{"route":"/geonames(.*)|$1"}
-	}},
-	"ws://127.0.0.1:5100":{
-	 "proxy":"",
-	 "matches":{
-		 "/wws":{"route":"(.*)|$1"}
-	 }}
-}
-`
-const clientConfig = `
-{
-	"http://nominatim.openstreetmap.org":{
-	 "proxy":""
-     },
-    "http://api.geonames.org":{
-	"proxy":""
-    },
-	"ws://127.0.0.1:5100":{
-}
+	"AccessLog":		"router-access-test.log",
+	"ErrorLog":			"router-error-test.log",
+	"Targets": {
+		"PORT5000": {
+			"URL": "http://127.0.0.1:5000"
+		}
+	},
+	"Routes": {
+		"/test(.*)":				"{PORT5000}/test$1",
+		"/test1/(.*)":				"{PORT5000}/test1/$1",
+		"/test2/(.*)":				"{PORT5000}/redirect2/$1",
+		"/test3/(.*)":				"{PORT5000}/$1",
+		"/nominatim/(.*)":			"http://nominatim.openstreetmap.org/$1",
+		"/geonames/(.*)":			"http://api.geonames.org/geonames/$1",
+		"/wws/(.*)":				"ws://127.0.0.1:5100/wws/$1"
+	}
 }
 `
 
@@ -103,30 +81,20 @@ func (s *sandbox) start(t *testing.T) {
 	s.back = newBackend()
 	s.back.httpServer.Addr = ":5000"
 	s.backWaiter = goLaunchWaiter(s.back.listenAndServe)
-	var err error
-	var routeConfig *RouterConfig
-	if routeConfig, err = ParseRoutes(strings.NewReader(mainConfig), strings.NewReader(clientConfig)); err != nil {
-		if t != nil {
-			t.Error(err)
-		}
+	config := &Config{}
+	err := config.LoadString(mainConfig)
+	if err != nil {
+		t.Error(err)
 	}
-	flags := flag.NewFlagSet("router", flag.ExitOnError)
-	flags.String("accesslog", "router_access.log", "access log file")
-	flags.String("errorlog", "router_error.log", "error log file")
-	flags.String("proxy", "", "proxy server:port")
-	flags.Bool("disablekeepalive", false, "Disable Keep Alives")
-	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
-	flags.Uint("responseheadertimeout", 60, "Header Timeout")
-	if len(os.Args) > 1 {
-		flags.Parse(os.Args[1:])
+	if s.front, err = NewServer(config); err != nil {
+		t.Fatal(err)
 	}
-	if s.front, err = NewServer(routeConfig, flags); err != nil {
-		if t != nil {
-			t.Error(err)
-		}
+
+	launch := func() error {
+		return s.front.ListenAndServe(":5002", "")
 	}
-	s.front.HttpServer.Addr = ":5002"
-	s.frontWaiter = goLaunchWaiter(s.front.ListenAndServe)
+
+	s.frontWaiter = goLaunchWaiter(launch)
 	if t != nil {
 		t.Log("Sandbox started")
 	}
@@ -160,143 +128,49 @@ func startSandbox(t *testing.T) *sandbox {
 	}
 }
 
-func TestSimple(t *testing.T) {
-	sb := startSandbox(t)
-	const expected = "Method GET URL /test1 BODY "
-	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1:5002/test1")
-	if err != nil {
-		t.Error(err)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Error(err)
-	}
-	resp.Body.Close()
-	if !bytes.Equal(body, []byte(expected)) {
-		t.Errorf("Expected %s received \"%s\"", expected, body)
-	}
-	sb.stop(t)
+func doHttp(t *testing.T, method, url, body, expect_body string) {
+	doHttpFunc(t, method, url, body, func(t *testing.T, resp_body string) {
+		if resp_body != expect_body {
+			t.Errorf("Expected \"%s\" received \"%s\"", expect_body, resp_body)
+		}
+	})
 }
 
-func TestLongURL(t *testing.T) {
-	sb := startSandbox(t)
-	const expected = "Method GET URL /test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/ BODY "
+func doHttpFunc(t *testing.T, method, url, body string, verifyBodyFunc func(*testing.T, string)) {
 	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1:5002/test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/")
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	if err != nil {
-		t.Error(err)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Error(err)
-	}
-	resp.Body.Close()
-	if !bytes.Equal(body, []byte(expected)) {
-		t.Errorf("Expected %s received %s", expected, body)
-	}
-	sb.stop(t)
-}
-
-func TestNotProxied(t *testing.T) {
-	sb := startSandbox(t)
-	const expected = "Not Found\n"
-	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1:5002/gert/jan/piet")
-	if err != nil {
-		t.Error(err)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Error(err)
-	}
-	resp.Body.Close()
-	if !bytes.Equal(body, []byte(expected)) {
-		t.Errorf("Expected %s received %s", expected, body)
-	}
-	sb.stop(t)
-}
-
-func TestReplaceBaseUrl(t *testing.T) {
-	sb := startSandbox(t)
-	const expected = "Method GET URL /redirect2/path1/path2 BODY "
-	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1:5002/test2/path1/path2")
-	if err != nil {
-		t.Error(err)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Error(err)
-	}
-	resp.Body.Close()
-	if !bytes.Equal(body, []byte(expected)) {
-		t.Errorf("Expected %s received %s", expected, body)
-	}
-	sb.stop(t)
-}
-
-func TestRemoveBaseUrl(t *testing.T) {
-	sb := startSandbox(t)
-	const expected = "Method GET URL /and/some/other/path/elements BODY "
-	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1:5002/test3/and/some/other/path/elements")
-	if err != nil {
-		t.Error(err)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Error(err)
-	}
-	resp.Body.Close()
-	if !bytes.Equal(body, []byte(expected)) {
-		t.Errorf("Expected %s received %s", expected, body)
-	}
-	sb.stop(t)
-}
-
-var externalExpected = `[{"place_id":"8072499","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"824654551","boundingbox":["-33.9658088684082","-33.9658050537109","18.8361072540283","18.836109161377"],"lat":"-33.9658052","lon":"18.8361077","display_name":"Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, South Africa","class":"place","type":"suburb","importance":0.45,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/poi_place_village.p.20.png"},{"place_id":"16447281","licence":"Data \u00a9 OpenStreetMap contributors, ODbL 1.0. http:\/\/www.openstreetmap.org\/copyright","osm_type":"node","osm_id":"1465367920","boundingbox":["-33.9660797119141","-33.9660758972168","18.8340282440186","18.8340301513672"],"lat":"-33.9660774","lon":"18.8340294","display_name":"Protea Hotel Stellenbosch, meson, Technopark, Stellenbosch Local Municipality, Cape Winelands District Municipality, Western Cape, 7600, South Africa","class":"tourism","type":"hotel","importance":0.201,"icon":"http:\/\/nominatim.openstreetmap.org\/images\/mapicons\/accommodation_hotel2.p.20.png"}]`
-
-func TestHostReplace(t *testing.T) {
-	sb := startSandbox(t)
-	client := &http.Client{}
-	resp, err := client.Get("http://127.0.0.1:5002/nominatim/search/TechnoPark,+Stellenbosch?format=json")
-	if err != nil {
-		t.Error(err)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Error(err)
-	}
-	resp.Body.Close()
-	strbody := string(body)
-	if strbody != externalExpected {
-		t.Errorf("Expected:\n%s \nreceived :\n%s", externalExpected, body)
-	}
-	sb.stop(t)
-}
-
-func TestBody(t *testing.T) {
-	sb := startSandbox(t)
-	const expected = "Method GET URL /test1/testbody BODY SomeBodyText"
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://127.0.0.1:5002/test1/testbody", strings.NewReader("SomeBodyText"))
-	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	body_response, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	resp.Body.Close()
-	strbody := string(body)
-	if strbody != expected {
-		t.Errorf("Expected \"%s\" received \"%s\"", expected, body)
-	}
+	verifyBodyFunc(t, string(body_response))
+}
+
+func TestVariousURL(t *testing.T) {
+	sb := startSandbox(t)
+
+	doHttp(t, "GET", "http://127.0.0.1:5002/gert/jan/piet", "", "Route not found\n")                                                       // Invalid route
+	doHttp(t, "GET", "http://127.0.0.1:5002/test1", "", "Method GET URL /test1 BODY ")                                                     // hello world
+	doHttp(t, "GET", "http://127.0.0.1:5002/test2/path1/path2", "", "Method GET URL /redirect2/path1/path2 BODY ")                         // replace base url
+	doHttp(t, "GET", "http://127.0.0.1:5002/test3/and/some/other/path/elements", "", "Method GET URL /and/some/other/path/elements BODY ") // remove base url
+	doHttp(t, "GET", "http://127.0.0.1:5002/test1/testbody", "SomeBodyText", "Method GET URL /test1/testbody BODY SomeBodyText")           // body
+	doHttp(t, "GET", "http://127.0.0.1:5002/test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/", "", "Method GET URL /test1/and/a/further/very/long/url/this/can/go/up/to/11kilobits/ BODY ")
+
+	// other host
+	doHttpFunc(t, "GET", "http://127.0.0.1:5002/nominatim/search/TechnoPark,+Stellenbosch?format=json", "", func(t *testing.T, resp_body string) {
+		if strings.Index(resp_body, "Cape Winelands") == -1 {
+			t.Errorf("nominatim search failed. Response body: %v", resp_body)
+		}
+	})
+
 	sb.stop(t)
 }
 
@@ -308,25 +182,8 @@ func TestMethods(t *testing.T) {
 		"Method DELETE URL /test1/testbody BODY SomeBodyText",
 		"Method POST URL /test1/testbody BODY SomeBodyText",
 		"Method PUT URL /test1/testbody BODY SomeBodyText"}
-	client := &http.Client{}
 	for index, method := range methods {
-		req, err := http.NewRequest(method, "http://127.0.0.1:5002/test1/testbody", strings.NewReader("SomeBodyText"))
-		if err != nil {
-			t.Error(err)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Error(err)
-		}
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			t.Error(err)
-		}
-		resp.Body.Close()
-		strbody := string(body)
-		if strbody != expected[index] {
-			t.Errorf("Expected \"%s\" received \"%s\"", expected[index], body)
-		}
+		doHttp(t, method, "http://127.0.0.1:5002/test1/testbody", "SomeBodyText", expected[index])
 	}
 	sb.stop(t)
 }
@@ -404,10 +261,10 @@ func TestWebsocket(t *testing.T) {
 	go wsserver(t)
 	time.Sleep(0.5 * 1e9) // Time for server to start
 	origin := "http://localhost/"
-	url := "ws://127.0.0.1:5002/wws"
+	url := "ws://127.0.0.1:5002/wws/x"
 	ws, err := websocket.Dial(url, "", origin)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Initial dial failed: %v", err)
 	}
 	msg := "testing webserver"
 	if e := websocket.Message.Send(ws, msg); e != nil {
@@ -516,7 +373,7 @@ func echoHandler(ws *websocket.Conn) {
 
 // simple websocket backend
 func wsserver(t *testing.T) {
-	http.Handle("/wws", websocket.Handler(echoHandler))
+	http.Handle("/wws/", websocket.Handler(echoHandler))
 	err := http.ListenAndServe(":5100", nil)
 	if err != nil {
 		t.Errorf("ListenAndServer : %s", err.Error())

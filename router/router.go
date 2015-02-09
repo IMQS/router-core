@@ -1,192 +1,164 @@
 package router
 
 import (
-	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
-	"net/url"
-	"os"
 	"regexp"
+	"sort"
 	"strings"
 )
 
-// Describes a route that maps from uncoming URL to backend service
+type scheme string
+
+const (
+	scheme_unknown scheme = ""
+	scheme_ws             = "ws"
+	scheme_http           = "http"
+)
+
+// A target URL
+type target struct {
+	baseUrl  string // The replacement string is appended to this
+	useProxy bool   // True if we route this via the proxy
+}
+
+// A route that maps from incoming URL to a target URL
 type route struct {
-	match   string
-	scheme  string
-	host    string
-	replace string
-	proxy   string
-	re      *regexp.Regexp
+	match    string
+	match_re *regexp.Regexp // Parsed regular expression of 'match'
+	replace  string
+	target   *target
 }
 
-// Rewrite an incoming URL, so that it is ready to be dispatched to a backend service
-func (r *route) generate(req *http.Request) (urlstr, scheme, proxy string) {
-	url := new(url.URL)
-	*url = *req.URL
-	url.Scheme = r.scheme
-	url.Host = r.host
-	url.Path = r.re.ReplaceAllString(url.Path, r.replace)
-	return url.String(), r.scheme, r.proxy
+func parse_scheme(targetUrl string) scheme {
+	switch {
+	case strings.Index(targetUrl, "ws") == 0:
+		return scheme_ws
+	case strings.Index(targetUrl, "http") == 0:
+		return scheme_http
+	}
+	return scheme_unknown
 }
 
-// This holds the definition of a bunch of routes
+func (r *route) scheme() scheme {
+	return parse_scheme(r.target.baseUrl)
+}
+
+// Router configuration when live
 type routeSet struct {
-	routes   map[string]*route
-	catchAll *route // Specified by matching "/", this route is executed if no other routes match
-	re       *regexp.Regexp
+	routes []*route
+
+	proxy string
+
+	/////////////////////////////////////////////////
+	// Cached state.
+	// The following state is computed from 'routes'.
+	prefixHash    map[string]*route // Keys are everything up to the first open parenthesis character '('
+	prefixLengths []int             // Descending list of unique prefix lengths
 }
 
 // The Router interface is responsible for taking an incoming request and rewriting it
 // for an appropriate backend.
 type Router interface {
-	// Rewrite an incoming request. The returned value 'routed' is true if the Router was
-	// able to process the request.
-	ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool)
+	// Rewrite an incoming request.
+	ProcessRoute(req *http.Request) (newurl, proxy string, success bool)
 }
 
-func (r *routeSet) ProcessRoute(req *http.Request) (newurl, scheme, proxy string, routed bool) {
-	re := r.re.FindString(req.RequestURI)
-	generator, ok := r.routes[re]
-	if !ok && r.catchAll != nil {
-		ok = true
-		generator = r.catchAll
-	}
-	if !ok {
-		return req.RequestURI, "http", "", false
-	}
-	newurl, scheme, proxy = generator.generate(req)
-	return newurl, scheme, proxy, true
-}
-
-// Turn a configuration into a runnable Router
-func NewRouter(config *RouterConfig) (router Router, err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			router = nil
-			err = e.(error)
+func (r *routeSet) computeCaches() error {
+	allLengths := map[int]bool{}
+	r.prefixHash = make(map[string]*route)
+	for _, route := range r.routes {
+		openParen := strings.Index(route.match, "(")
+		key := ""
+		if openParen == -1 {
+			// route has no regex captures
+			key = route.match
+		} else {
+			key = route.match[:openParen]
 		}
-	}()
-
-	routeset := &routeSet{}
-	routeset.routes = make(map[string]*route)
-	routeset.re = regexp.MustCompile("^(/\\w*)/??")
-
-	for target, conf := range *config {
-		for path, match := range conf.Matches {
-			parts := strings.Split(match.Route, "|")
-			scheme := target[:strings.Index(target, ":")]
-			host := target[strings.Index(target, "//")+2:]
-			route := &route{}
-			route.match = path
-			route.scheme = scheme
-			route.host = host
-			route.replace = parts[1]
-			route.proxy = conf.Proxy
-			route.re = regexp.MustCompile(parts[0])
-			routeset.routes[path] = route
-			if path == "/" {
-				routeset.catchAll = route
-			}
+		r.prefixHash[key] = route
+		allLengths[len(key)] = true
+		var err error
+		route.match_re, err = regexp.Compile(route.match)
+		if err != nil {
+			return fmt.Errorf("Failed to compile regex '%v': %v", route.match, err)
 		}
 	}
 
-	return Router(routeset), nil
-}
-
-/*
-Reads and parse a routing config file, and return a new Router object.
-
-An example config file:
-{
-	"http://server1":{
-		"proxy":"",
-		"matches":{
-			"/s1p1":{"route":"(.*)|$1"},
-			"/s1p2":{"route":"(.*)|$1"},
-			"/s1p3":{"route":"(.*)|$1"}
-		}},
-	"http://server2":{
-		"proxy":"",
-		"matches":{
-			"/s2p1":{"route":"/s2p1(.*)|/newpath$1"},
-			"/s2p2":{"route":"/s2p2(.*)|$1"},
-			"/s2p3":{"route":"(.*)|$1"}
-		}},
-	"ws://server3:9000":{
-		"proxy":"",
-		"matches":{
-			"/wws":{"route":"(.*)|/$1"}
-		}}
-}
-In the example above the following will happen assuming router is deployed on port 80 on server "server":
-
-	http://server/s1p1                           -> http://server1/s1p1
-	http://server/s1p2                           -> http://server1/s1p2
-	http://server/s1p3/query?q=amount&order=asc  -> http://server1/s1p3/query?q=amount&order=asc
-
-	http://server/s2p1/further/path/elements     -> http://server2/newpath1/further/path/elements
-	http://server/s2p2/further/path/elements     -> http://server2/further/path/elements
-	http://server/s2p3/further/path/elements     -> http://server2/s2p3/further/path/elements
-
-	ws://server/wws                              -> ws://server3:9000/wws
-
-*/
-type Routes map[string]struct {
-	Route string `json:"route"`
-}
-
-// Top-level configuration of a router
-type RouterConfig map[string]struct {
-	Proxy   string `json:"proxy"`
-	Matches Routes
-}
-
-func mergeConfigs(dst, src *RouterConfig) error {
-	for key, srcVal := range *src {
-		if dstVal, ok := (*dst)[key]; ok {
-			// Have same target merge src into dst, for now only proxy and new routes
-			if proxy := srcVal.Proxy; len(proxy) > 0 {
-				dstVal.Proxy = proxy
-			}
-			(*dst)[key] = dstVal
-		}
+	// Produce descending list of unique prefix lengths
+	r.prefixLengths = []int{}
+	for x, _ := range allLengths {
+		r.prefixLengths = append(r.prefixLengths, x)
 	}
+	sort.Sort(sort.Reverse(sort.IntSlice(r.prefixLengths)))
+
 	return nil
 }
 
-func mergeMatches(dst, src Routes) {
-	// ToDo
+func (r *routeSet) ProcessRoute(req *http.Request) (newurl, proxy string, success bool) {
+
+	// Match from longest prefix to shortest
+	var route *route
+	for _, length := range r.prefixLengths {
+		if len(req.RequestURI) >= length {
+			if route = r.prefixHash[req.RequestURI[:length]]; route != nil {
+				break
+			}
+		}
+	}
+
+	if route == nil {
+		return "", "", false
+	}
+
+	rewritten := route.match_re.ReplaceAllString(req.RequestURI, route.target.baseUrl+route.replace)
+
+	if route.target.useProxy {
+		proxy = r.proxy
+	}
+	return rewritten, proxy, true
 }
 
-// Updated to have a global config file and a client specific file. The global config file gets overriden by the client config file.
-func ParseRoutes(mainConfig interface{}) (*RouterConfig, error) {
-	main, err := parseRoute(mainConfig)
+// Turn a configuration into a runnable Router
+func NewRouter(config *Config) (Router, error) {
+	rs := &routeSet{}
+	rs.proxy = config.Proxy
+
+	err := config.verify()
 	if err != nil {
 		return nil, err
 	}
 
-	return main, nil
-}
-
-func parseRoute(config interface{}) (*RouterConfig, error) {
-	var reader io.Reader
-	var err error
-	switch config.(type) {
-	case io.Reader:
-		reader = config.(io.Reader)
-	case string:
-		file, err := os.Open(config.(string))
-		if err != nil {
-			return nil, err
-		}
-		defer file.Close()
-		reader = file
+	targets := map[string]*target{}
+	for name, ctarget := range config.Targets {
+		t := &target{}
+		t.baseUrl = ctarget.URL
+		t.useProxy = ctarget.UseProxy
+		targets[name] = t
 	}
-	result := &RouterConfig{}
-	decoder := json.NewDecoder(reader)
-	if err = decoder.Decode(result); err != nil {
+
+	for match, replace := range config.Routes {
+		route := &route{}
+		route.match = match
+		named_target, named_suffix := split_named_target(replace)
+		if len(named_target) != 0 {
+			if targets[named_target] == nil {
+				return nil, fmt.Errorf("Route target (%v) not defined", named_target)
+			}
+			route.target = targets[named_target]
+			route.replace = named_suffix
+		} else {
+			route.target = &target{}
+			route.target.useProxy = false
+			route.target.baseUrl = ""
+			route.replace = replace
+		}
+		rs.routes = append(rs.routes, route)
+	}
+
+	if err = rs.computeCaches(); err != nil {
 		return nil, err
 	}
-	return result, nil
+
+	return rs, nil
 }

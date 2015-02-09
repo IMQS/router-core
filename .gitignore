@@ -1,3 +1,5 @@
 .hg
 *.sublime-project
 *.sublime-workspace
+router/router-access-test.log
+router/router-error-test.log

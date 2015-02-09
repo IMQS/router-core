@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flag"
+	"flags"
 	"fmt"
 	"github.com/IMQS/router-core/router"
 	"log"
@@ -23,36 +23,40 @@ func realMain() (result int) {
 	}()
 
 	flags := flag.NewFlagSet("router", flag.ExitOnError)
-	flags.String("accesslog", "c:\\imqsvar\\logs\\router_access.log", "access log file")
-	flags.String("errorlog", "c:\\imqsvar\\logs\\router_error.log", "error log file")
-	flags.String("mainconfig", "c:\\imqsbin\\conf\\router_config.json", "main config file for router")
-	flags.String("proxy", "", "proxy server:port to use")
-	flags.Bool("disablekeepalive", false, "Disable Keep Alives")
-	flags.Uint("maxidleconnections", 50, "Maximum Idle Connections")
-	flags.Uint("responseheadertimeout", 60, "Header Timeout")
-	flags.String("httpPort", "80", "The port on which the router receives traffic")
-	flags.String("httpPortSecondary", "", "Optional secondary port for http traffic")
+	mainconfig := flags.String("mainconfig", "", "main config file")
+	auxconfig := flags.String("auxconfig", "", "auxiliary config file, overlayed onto main")
+
 	if len(os.Args) > 1 {
 		flags.Parse(os.Args[1:])
 	}
 
-	config, errCfg := router.ParseRoutes(flags.Lookup("mainconfig").Value.String())
-	if errCfg != nil {
-		panic(errCfg)
+	if *mainconfig == "" {
+		panic("You must set mainconfig")
 	}
 
-	server, errServer := router.NewServer(config, flags)
-	if errServer != nil {
-		panic(errServer)
+	config := &router.Config{}
+	err := config.LoadFile(*mainconfig)
+	if err != nil {
+		panic(err)
+	}
+	if *auxconfig != "" {
+		aux := router.Config{}
+		if err = aux.LoadFile(*auxconfig); err != nil {
+			panic(err)
+		}
+		config.Overlay(&aux)
+	}
+
+	server, err := router.NewServer(config, flags)
+	if err != nil {
+		panic(err)
 	}
 
 	handler := func() error {
-		httpPort := ""
+		httpPort := fmt.Sprintf(":%v", config.GetPort())
 		httpPortSecondary := ""
-
-		httpPort = ":" + flags.Lookup("httpPort").Value.String()
-		if flags.Lookup("httpPortSecondary").Value.String() != "" {
-			httpPortSecondary = ":" + flags.Lookup("httpPortSecondary").Value.String()
+		if config.SecondaryPort != 0 {
+			httpPortSecondary = fmt.Sprintf(":%v", config.SecondaryPort)
 		}
 
 		log.Fatal(server.ListenAndServe(httpPort, httpPortSecondary))
