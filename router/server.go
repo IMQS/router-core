@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"github.com/cespare/go-apachelog"
 	"github.com/natefinch/lumberjack"
 	"golang.org/x/net/websocket"
@@ -30,6 +31,12 @@ type Server struct {
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
 func NewServer(config *Config) (*Server, error) {
+	if config.AccessLog == "" {
+		return nil, fmt.Errorf("You must specify an AccessLog file")
+	}
+	if config.ErrorLog == "" {
+		return nil, fmt.Errorf("You must specify an ErrorLog file")
+	}
 	var err error
 	s := &Server{}
 	s.HttpServer = &http.Server{}

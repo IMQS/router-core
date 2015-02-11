@@ -19,9 +19,9 @@ Example configuration file:
 	"HTTP": {
 		"Port": 80,												Primary HTTP port
 		"SecondaryPort": 8080,									One can optionally listen for HTTP on two ports
-		"DisableKeepAlive": true,								Controls http.Transport.DisableKeepAlive
-		"MaxIdleConnections": 50,								Controls http.Transport.MaxIdleConnections
-		"ResponseHeaderTimeout": 60								Controls http.Transport.ResponseHeaderTimeout
+		"DisableKeepAlive": true,								Controls http.Transport.DisableKeepAlive. Default = false
+		"MaxIdleConnections": 50,								Controls http.Transport.MaxIdleConnections. Default = 0 (uses Go std library default)
+		"ResponseHeaderTimeout": 60								Controls http.Transport.ResponseHeaderTimeout. Default = 0 (uses Go std library default)
 	},
 	"Targets": {
 		"AUTH": {												Targets names must be CAPITAL. This rule exists solely to enforce a convention.
@@ -129,7 +129,6 @@ func (c *Config) verify() error {
 			return fmt.Errorf("Could not parse proxy URL (%v)", c.Proxy)
 		}
 	}
-
 	return nil
 }
 
