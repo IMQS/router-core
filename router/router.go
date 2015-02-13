@@ -2,10 +2,13 @@ package router
 
 import (
 	"fmt"
-	"net/http"
+	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 type scheme string
@@ -18,8 +21,16 @@ const (
 
 // A target URL
 type target struct {
-	baseUrl  string // The replacement string is appended to this
-	useProxy bool   // True if we route this via the proxy
+	baseUrl  string     // The replacement string is appended to this
+	useProxy bool       // True if we route this via the proxy
+	auth     targetAuth // Special authentication rules for this target
+}
+
+type targetAuth struct {
+	config       ConfigAuthInject
+	token        string
+	tokenExpires time.Time
+	lock         sync.RWMutex
 }
 
 // A route that maps from incoming URL to a target URL
@@ -48,7 +59,7 @@ func (r *route) scheme() scheme {
 type routeSet struct {
 	routes []*route
 
-	proxy string
+	proxy *url.URL
 
 	/////////////////////////////////////////////////
 	// Cached state.
@@ -60,8 +71,10 @@ type routeSet struct {
 // The Router interface is responsible for taking an incoming request and rewriting it
 // for an appropriate backend.
 type Router interface {
-	// Rewrite an incoming request.
-	ProcessRoute(req *http.Request) (newurl, proxy string, success bool)
+	// Rewrite an incoming request. If newurl is a blank string, then the URL does not match any route.
+	ProcessRoute(uri *url.URL) (newurl string, auth *targetAuth)
+	// Return the URL of a proxy to use for a given request
+	GetProxy(req *ms_http.Request) (*url.URL, error)
 }
 
 func (r *routeSet) computeCaches() error {
@@ -95,38 +108,48 @@ func (r *routeSet) computeCaches() error {
 	return nil
 }
 
-func (r *routeSet) ProcessRoute(req *http.Request) (newurl, proxy string, success bool) {
+func (r *routeSet) ProcessRoute(uri *url.URL) (newurl string, auth *targetAuth) {
+	route := r.match(uri)
+	if route == nil {
+		return "", nil
+	}
 
+	rewritten := route.match_re.ReplaceAllString(uri.Path, route.target.baseUrl+route.replace)
+
+	return rewritten, &route.target.auth
+}
+
+func (r *routeSet) GetProxy(req *ms_http.Request) (*url.URL, error) {
+	route := r.match(req.URL)
+	if route == nil || !route.target.useProxy {
+		return nil, nil
+	}
+	return r.proxy, nil
+}
+
+func (r *routeSet) match(uri *url.URL) *route {
 	// Match from longest prefix to shortest
-	var route *route
 	for _, length := range r.prefixLengths {
-		if len(req.RequestURI) >= length {
-			if route = r.prefixHash[req.RequestURI[:length]]; route != nil {
-				break
+		if len(uri.Path) >= length {
+			if route := r.prefixHash[uri.Path[:length]]; route != nil {
+				return route
 			}
 		}
 	}
-
-	if route == nil {
-		return "", "", false
-	}
-
-	rewritten := route.match_re.ReplaceAllString(req.RequestURI, route.target.baseUrl+route.replace)
-
-	if route.target.useProxy {
-		proxy = r.proxy
-	}
-	return rewritten, proxy, true
+	return nil
 }
 
 // Turn a configuration into a runnable Router
 func NewRouter(config *Config) (Router, error) {
 	rs := &routeSet{}
-	rs.proxy = config.Proxy
 
 	err := config.verify()
 	if err != nil {
 		return nil, err
+	}
+
+	if config.Proxy != "" {
+		rs.proxy, _ = url.Parse(config.Proxy) // config.verify() ensures that the proxy is a legal URL
 	}
 
 	targets := map[string]*target{}
@@ -134,6 +157,7 @@ func NewRouter(config *Config) (Router, error) {
 		t := &target{}
 		t.baseUrl = ctarget.URL
 		t.useProxy = ctarget.UseProxy
+		t.auth.config = ctarget.Auth
 		targets[name] = t
 	}
 

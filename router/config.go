@@ -27,6 +27,15 @@ Example configuration file:
 		"AUTH": {												Targets names must be CAPITAL. This rule exists solely to enforce a convention.
 			"URL": "http://127.0.0.1:2000",
 			"UseProxy": true									If true, and a proxy is specified, then route this traffic through the proxy
+		},
+		"THIRDPARTY": {
+			"URL": "https://externalsite.com",
+			"Auth": {											Transparent authentication
+				"Type": "PureHub",
+				"LoginURL": "https://externalsite.com/Token",
+				"Username": "username@example.com",
+				"Password": "mypassword"
+			}
 		}
 	},
 	"Routes": {
@@ -34,6 +43,7 @@ Example configuration file:
 		"/login/(.*)": "{AUTH}/login/$1",						If you use a named target, like {AUTH}, then it must be the first part of the replacement string.
 		"/docs/(.*)": "https://docs.example.com/$1",
 		"/about/(.*)": "http://127.0.0.1:2001/$1",
+		"/3rdparty/(.*)": "{THIRDPARTY}/$1",					Transparent authentication
 		"/telemetry/(.*)": "ws://127.0.0.1:2001/$1",			Websocket target
 		"/(.*)": "http://127.0.0.1/www/$1"						This will end up catching anything that doesn't match one of the more specific routes
 	},
@@ -47,13 +57,21 @@ is performed as one would assume, but that is only after a particular route has 
 in terms of the number of slashes in the prefix, is 10. In other words prefixes beyond /a/b/c/d/(.*) won't work correctly.
 */
 
+type AuthInjectType string
+
+const (
+	AuthInjectNone    AuthInjectType = ""
+	AuthInjectPureHub                = "PureHub"
+)
+
 type Config struct {
-	Proxy     string
-	AccessLog string
-	ErrorLog  string
-	HTTP      ConfigHTTP
-	Targets   map[string]ConfigTarget
-	Routes    map[string]string
+	Proxy      string
+	AccessLog  string
+	ErrorLog   string
+	HTTP       ConfigHTTP
+	Targets    map[string]ConfigTarget
+	Routes     map[string]string
+	AuthInject []ConfigAuthInject
 }
 
 type ConfigHTTP struct {
@@ -64,9 +82,17 @@ type ConfigHTTP struct {
 	ResponseHeaderTimeout int
 }
 
+type ConfigAuthInject struct {
+	Type     AuthInjectType
+	LoginURL string
+	Username string
+	Password string
+}
+
 type ConfigTarget struct {
 	URL      string
 	UseProxy bool
+	Auth     ConfigAuthInject
 }
 
 // {FOO}/bar -> (FOO, /bar)
@@ -126,7 +152,7 @@ func (c *Config) verify() error {
 	if c.Proxy != "" {
 		_, err := url.Parse(c.Proxy)
 		if err != nil {
-			return fmt.Errorf("Could not parse proxy URL (%v)", c.Proxy)
+			return fmt.Errorf("Could not parse proxy URL (%v): %v", c.Proxy, err)
 		}
 	}
 	return nil

@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"github.com/cespare/go-apachelog"
 	"github.com/natefinch/lumberjack"
 	"golang.org/x/net/websocket"
@@ -20,7 +21,7 @@ import (
 // Router Server
 type Server struct {
 	HttpServer        *http.Server
-	httpTransport     *http.Transport
+	httpTransport     *ms_http.Transport
 	router            Router
 	errorLog          *log.Logger
 	listener          net.Listener
@@ -48,16 +49,20 @@ func NewServer(config *Config) (*Server, error) {
 	log.SetOutput(errorLog)
 	log.SetFlags(logFlags)
 
-	s.httpTransport = &http.Transport{
+	if s.router, err = NewRouter(config); err != nil {
+		return nil, err
+	}
+
+	s.httpTransport = &ms_http.Transport{
 		DisableKeepAlives:     config.HTTP.DisableKeepAlive,
 		MaxIdleConnsPerHost:   config.HTTP.MaxIdleConnections,
 		DisableCompression:    true,
 		ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
 	}
-
-	if s.router, err = NewRouter(config); err != nil {
-		return nil, err
+	s.httpTransport.Proxy = func(req *ms_http.Request) (*url.URL, error) {
+		return s.router.GetProxy(req)
 	}
+
 	s.errorLog.Print("Starting v0.03 with:")
 	s.errorLog.Printf(" DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
 	s.errorLog.Printf(" MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
@@ -137,18 +142,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "", http.StatusTeapot)
 		return
 	}
-	newurl, proxy, routed := s.router.ProcessRoute(req)
+	newurl, auth := s.router.ProcessRoute(req.URL)
 
-	//s.errorLog.Printf("(%v) -> (%v) [%v]", req.RequestURI, newurl, proxy)
+	// It might be useful to be able to toggle the following output on. But only when debugging.
+	// Having said that, I think we've failed at our config schema if people can't figure out their routes.
+	//s.errorLog.Printf("(%v) -> (%v) [%v]", req.RequestURI, newurl)
 
-	if !routed {
-		// Everything not routed is a NotFound "error"
+	if newurl == "" {
 		http.Error(w, "Route not found", http.StatusNotFound)
 		return
 	}
+
+	if !authInject(s.errorLog, w, req, auth) {
+		return
+	}
+
 	switch parse_scheme(newurl) {
 	case "http":
-		s.forwardHttp(w, req, newurl, proxy)
+		s.forwardHttp(w, req, newurl)
 	case "ws":
 		s.forwardWebsocket(w, req, newurl)
 	}
@@ -173,8 +184,8 @@ router would react to the "Connection: close" header by closing the TCP connecti
 the response was sent. This would then result in s.httpTransport.RoundTrip(cleaned) returning
 an EOF error when it tried to re-use that TCP connection.
 */
-func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, proxy string) {
-	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
+func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string) {
+	cleaned, err := ms_http.NewRequest(req.Method, newurl, req.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -182,7 +193,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 	srcHost := req.Host
 	dstHost := cleaned.Host
 
-	copyheaders := func(src http.Header, dst http.Header) {
+	copyheadersIn := func(src http.Header, dst ms_http.Header) {
 		for k, vv := range src {
 			for _, v := range vv {
 				if k == "Location" {
@@ -197,34 +208,30 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl, p
 		}
 	}
 
-	copyheaders(req.Header, cleaned.Header)
+	copyheadersOut := func(src ms_http.Header, dst http.Header) {
+		for k, vv := range src {
+			for _, v := range vv {
+				dst.Add(k, v)
+			}
+		}
+	}
+
+	copyheadersIn(req.Header, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
 
-	if len(proxy) > 0 {
-		proxyurl, err := url.Parse(proxy)
-		if err != nil {
-			s.errorLog.Printf("Could not parse proxy")
-		}
-		s.httpTransport.Proxy = http.ProxyURL(proxyurl)
-		s.errorLog.Println("Using Proxy:", s.httpTransport.Proxy)
-	} else {
-		s.httpTransport.Proxy = nil
-	}
-	resp, e := s.httpTransport.RoundTrip(cleaned)
-	if e != nil {
-		s.errorLog.Println("HTTP RoundTrip error: " + e.Error())
-		http.Error(w, e.Error(), http.StatusGatewayTimeout)
+	resp, err := s.httpTransport.RoundTrip(cleaned)
+	if err != nil {
+		s.errorLog.Println("HTTP RoundTrip error: " + err.Error())
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	defer resp.Body.Close()
-	copyheaders(resp.Header, w.Header())
+	copyheadersOut(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
 
 	if resp.Body != nil {
-		writers := make([]io.Writer, 0, 1)
-		writers = append(writers, w)
-		io.Copy(io.MultiWriter(writers...), resp.Body)
+		defer resp.Body.Close()
+		io.Copy(w, resp.Body)
 	}
 }
 
