@@ -28,18 +28,18 @@ type pureHubAuthResponse struct {
 }
 
 // Returns true if the request should continue to be passed through the router
-func authInject(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetAuth) bool {
+func authPassThrough(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
 	switch target.config.Type {
-	case AuthInjectNone:
+	case AuthPassThroughNone:
 		return true
-	case AuthInjectPureHub:
+	case AuthPassThroughPureHub:
 		return authInjectPureHub(log, w, req, target)
 	default:
 		return true
 	}
 }
 
-func authInjectPureHub(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetAuth) bool {
+func authInjectPureHub(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
 	// The 'inject' function assumes you have obtained the lock on target.token
 	inject := func() {
 		req.Header.Set("Authorization", "Bearer "+target.token)
@@ -78,7 +78,7 @@ func authInjectPureHub(log *log.Logger, w http.ResponseWriter, req *http.Request
 	return true
 }
 
-func pureHubGetToken(log *log.Logger, target *targetAuth) error {
+func pureHubGetToken(log *log.Logger, target *targetPassThroughAuth) error {
 	request_body := "grant_type=password&username=" + url.QueryEscape(target.config.Username) + "&password=" + url.QueryEscape(target.config.Password)
 	resp, err := ms_http.Post(target.config.LoginURL, "application/x-www-form-urlencoded", strings.NewReader(request_body))
 	if err != nil {

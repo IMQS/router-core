@@ -16,6 +16,7 @@ Example configuration file:
 	"Proxy": "http://192.168.1.1:1234",							This is used to route any targets that specify UseProxy: true
 	"AccessLog": "c:/imqsvar/logs/router-access.log",			The access log file
 	"ErrorLog": "c:/imqsvar/logs/router-error.log",				The error log file
+	"DebugRoutes": true,										Log every match attempt to the error log.
 	"HTTP": {
 		"Port": 80,												Primary HTTP port
 		"SecondaryPort": 8080,									One can optionally listen for HTTP on two ports
@@ -24,13 +25,14 @@ Example configuration file:
 		"ResponseHeaderTimeout": 60								Controls http.Transport.ResponseHeaderTimeout. Default = 0 (uses Go std library default)
 	},
 	"Targets": {
-		"AUTH": {												Targets names must be CAPITAL. This rule exists solely to enforce a convention.
+		"MAPS": {												Targets names must be CAPITAL. This rule exists solely to enforce a convention.
 			"URL": "http://127.0.0.1:2000",
 			"UseProxy": true									If true, and a proxy is specified, then route this traffic through the proxy
 		},
 		"THIRDPARTY": {
 			"URL": "https://externalsite.com",
-			"Auth": {											Transparent authentication
+			"RequirePermission": "enabled",						Do not allow traffic to this target unless imqsauth says we have this permission
+			"PassThroughAuth": {								Transparent authentication
 				"Type": "PureHub",
 				"LoginURL": "https://externalsite.com/Token",
 				"Username": "username@example.com",
@@ -39,8 +41,8 @@ Example configuration file:
 		}
 	},
 	"Routes": {
-		"/auth/(.*)": "{AUTH}/$1",								Left side is a regex matcher. Right side is replacement.
-		"/login/(.*)": "{AUTH}/login/$1",						If you use a named target, like {AUTH}, then it must be the first part of the replacement string.
+		"/tile/(.*)": "{MAPS}/tile/$1",							Left side is a regex matcher. Right side is replacement.
+		"/themes/(.*)": "{MAPS}/theme/$1",						If you use a named target, like {MAPS}, then it must be the first part of the replacement string.
 		"/docs/(.*)": "https://docs.example.com/$1",
 		"/about/(.*)": "http://127.0.0.1:2001/$1",
 		"/3rdparty/(.*)": "{THIRDPARTY}/$1",					Transparent authentication
@@ -57,21 +59,21 @@ is performed as one would assume, but that is only after a particular route has 
 in terms of the number of slashes in the prefix, is 10. In other words prefixes beyond /a/b/c/d/(.*) won't work correctly.
 */
 
-type AuthInjectType string
+type AuthPassThroughType string
 
 const (
-	AuthInjectNone    AuthInjectType = ""
-	AuthInjectPureHub                = "PureHub"
+	AuthPassThroughNone    AuthPassThroughType = ""
+	AuthPassThroughPureHub                     = "PureHub"
 )
 
 type Config struct {
-	Proxy      string
-	AccessLog  string
-	ErrorLog   string
-	HTTP       ConfigHTTP
-	Targets    map[string]ConfigTarget
-	Routes     map[string]string
-	AuthInject []ConfigAuthInject
+	Proxy       string
+	AccessLog   string
+	ErrorLog    string
+	DebugRoutes bool
+	HTTP        ConfigHTTP
+	Targets     map[string]ConfigTarget
+	Routes      map[string]string
 }
 
 type ConfigHTTP struct {
@@ -82,17 +84,18 @@ type ConfigHTTP struct {
 	ResponseHeaderTimeout int
 }
 
-type ConfigAuthInject struct {
-	Type     AuthInjectType
+type ConfigPassThroughAuth struct {
+	Type     AuthPassThroughType
 	LoginURL string
 	Username string
 	Password string
 }
 
 type ConfigTarget struct {
-	URL      string
-	UseProxy bool
-	Auth     ConfigAuthInject
+	URL               string
+	UseProxy          bool
+	RequirePermission string
+	PassThroughAuth   ConfigPassThroughAuth
 }
 
 // {FOO}/bar -> (FOO, /bar)
@@ -193,6 +196,9 @@ func (c *Config) Overlay(other *Config) {
 	}
 	if other.ErrorLog != "" {
 		c.ErrorLog = other.ErrorLog
+	}
+	if other.DebugRoutes {
+		c.DebugRoutes = other.DebugRoutes
 	}
 	if other.HTTP.DisableKeepAlive {
 		c.HTTP.DisableKeepAlive = other.HTTP.DisableKeepAlive

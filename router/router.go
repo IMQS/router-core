@@ -21,13 +21,14 @@ const (
 
 // A target URL
 type target struct {
-	baseUrl  string     // The replacement string is appended to this
-	useProxy bool       // True if we route this via the proxy
-	auth     targetAuth // Special authentication rules for this target
+	baseUrl           string                // The replacement string is appended to this
+	useProxy          bool                  // True if we route this via the proxy
+	requirePermission string                // If non-empty, then first authorize before continuing
+	auth              targetPassThroughAuth // Special authentication rules for this target
 }
 
-type targetAuth struct {
-	config       ConfigAuthInject
+type targetPassThroughAuth struct {
+	config       ConfigPassThroughAuth
 	token        string
 	tokenExpires time.Time
 	lock         sync.RWMutex
@@ -72,7 +73,7 @@ type routeSet struct {
 // for an appropriate backend.
 type Router interface {
 	// Rewrite an incoming request. If newurl is a blank string, then the URL does not match any route.
-	ProcessRoute(uri *url.URL) (newurl string, auth *targetAuth)
+	ProcessRoute(uri *url.URL) (newurl string, requirePermission string, passThroughAuth *targetPassThroughAuth)
 	// Return the URL of a proxy to use for a given request
 	GetProxy(req *ms_http.Request) (*url.URL, error)
 }
@@ -108,15 +109,15 @@ func (r *routeSet) computeCaches() error {
 	return nil
 }
 
-func (r *routeSet) ProcessRoute(uri *url.URL) (newurl string, auth *targetAuth) {
+func (r *routeSet) ProcessRoute(uri *url.URL) (newurl string, requirePermission string, passThroughAuth *targetPassThroughAuth) {
 	route := r.match(uri)
 	if route == nil {
-		return "", nil
+		return "", "", nil
 	}
 
-	rewritten := route.match_re.ReplaceAllString(uri.Path, route.target.baseUrl+route.replace)
+	rewritten := route.match_re.ReplaceAllString(uri.RequestURI(), route.target.baseUrl+route.replace)
 
-	return rewritten, &route.target.auth
+	return rewritten, route.target.requirePermission, &route.target.auth
 }
 
 func (r *routeSet) GetProxy(req *ms_http.Request) (*url.URL, error) {
@@ -129,6 +130,10 @@ func (r *routeSet) GetProxy(req *ms_http.Request) (*url.URL, error) {
 
 func (r *routeSet) match(uri *url.URL) *route {
 	// Match from longest prefix to shortest
+	// Note that we match only on PATH, not on the full URI - so anything behind the question mark is
+	// not going to be matched. That's purely a "stupid" performance optimization. If you need to match
+	// behind the question mark, then just go ahead and change this code to match on RequestURI() instead
+	// of on Path.
 	for _, length := range r.prefixLengths {
 		if len(uri.Path) >= length {
 			if route := r.prefixHash[uri.Path[:length]]; route != nil {
@@ -157,7 +162,8 @@ func NewRouter(config *Config) (Router, error) {
 		t := &target{}
 		t.baseUrl = ctarget.URL
 		t.useProxy = ctarget.UseProxy
-		t.auth.config = ctarget.Auth
+		t.requirePermission = ctarget.RequirePermission
+		t.auth.config = ctarget.PassThroughAuth
 		targets[name] = t
 	}
 

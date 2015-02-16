@@ -1,27 +1,36 @@
 package router
 
 import (
+	"encoding/json"
 	"fmt"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"github.com/cespare/go-apachelog"
 	"github.com/natefinch/lumberjack"
 	"golang.org/x/net/websocket"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+const imqsauth_url = "http://127.0.0.1:2003"
+const imqsauth_cookie = "session"
+
+var imqsauth_role2name map[int]string
+
 // Router Server
 type Server struct {
 	HttpServer        *http.Server
 	httpTransport     *ms_http.Transport
+	debugRoutes       bool
 	router            Router
 	errorLog          *log.Logger
 	listener          net.Listener
@@ -42,6 +51,7 @@ func NewServer(config *Config) (*Server, error) {
 	s := &Server{}
 	s.HttpServer = &http.Server{}
 	s.HttpServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
+	s.debugRoutes = config.DebugRoutes
 
 	logFlags := log.Ldate | log.Ltime | log.Lmicroseconds
 	errorLog := openLog(config.ErrorLog, os.Stderr)
@@ -65,6 +75,7 @@ func NewServer(config *Config) (*Server, error) {
 
 	s.errorLog.Print("Starting v0.03 with:")
 	s.errorLog.Printf(" DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
+
 	s.errorLog.Printf(" MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
 	s.errorLog.Printf(" ResponseHeaderTimeout: %v", config.HTTP.ResponseHeaderTimeout)
 	s.wsdlMatch = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
@@ -142,18 +153,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "", http.StatusTeapot)
 		return
 	}
-	newurl, auth := s.router.ProcessRoute(req.URL)
+	newurl, requirePermission, passThroughAuth := s.router.ProcessRoute(req.URL)
 
-	// It might be useful to be able to toggle the following output on. But only when debugging.
-	// Having said that, I think we've failed at our config schema if people can't figure out their routes.
-	//s.errorLog.Printf("(%v) -> (%v) [%v]", req.RequestURI, newurl)
+	if s.debugRoutes {
+		s.errorLog.Printf("(%v) -> (%v)", req.RequestURI, newurl)
+	}
 
 	if newurl == "" {
 		http.Error(w, "Route not found", http.StatusNotFound)
 		return
 	}
 
-	if !authInject(s.errorLog, w, req, auth) {
+	if !s.authorize(w, req, requirePermission) {
+		return
+	}
+
+	if !authPassThrough(s.errorLog, w, req, passThroughAuth) {
 		return
 	}
 
@@ -193,30 +208,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 	srcHost := req.Host
 	dstHost := cleaned.Host
 
-	copyheadersIn := func(src http.Header, dst ms_http.Header) {
-		for k, vv := range src {
-			for _, v := range vv {
-				if k == "Location" {
-					v = strings.Replace(v, dstHost, srcHost, 1)
-				}
-				if k == "Connection" && v == "close" {
-					// See detailed explanation in top-level function comment
-					continue
-				}
-				dst.Add(k, v)
-			}
-		}
-	}
-
-	copyheadersOut := func(src ms_http.Header, dst http.Header) {
-		for k, vv := range src {
-			for _, v := range vv {
-				dst.Add(k, v)
-			}
-		}
-	}
-
-	copyheadersIn(req.Header, cleaned.Header)
+	copyheadersIn(srcHost, req.Header, dstHost, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
 
@@ -287,16 +279,63 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 	wsServer.ServeHTTP(w, req)
 }
 
-func openLog(filename string, defaultWriter io.Writer) io.Writer {
-	if filename == "" {
-		return defaultWriter
+// Returns true if the request should continue to be passed through the router
+// We make a roun-trip to imqsauth here to check the credentials of the incoming request.
+// This adds about a 0.5ms latency to the request. It might be worthwhile to embed
+// imqsauth inside imqsrouter.
+func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePermission string) bool {
+	if requirePermission == "" {
+		return true
 	}
-	return &lumberjack.Logger{
-		Filename:   filename,
-		MaxSize:    50, // megabytes
-		MaxBackups: 3,
-		MaxAge:     90, // days
+
+	authReq, err := ms_http.NewRequest("GET", imqsauth_url+"/check", nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+
+	headAuth := req.Header.Get("Authorization")
+	if headAuth != "" {
+		authReq.Header.Set("Authorization", headAuth)
+	}
+	cookieSession, _ := req.Cookie(imqsauth_cookie)
+	if cookieSession != nil {
+		authReq.AddCookie(copyCookieToMSHTTP(cookieSession))
+	}
+
+	authResp, err := s.httpTransport.RoundTrip(authReq)
+	if err != nil {
+		s.errorLog.Println("HTTP RoundTrip error: " + err.Error())
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return false
+	}
+	defer authResp.Body.Close()
+
+	respBodyBytes, _ := ioutil.ReadAll(authResp.Body)
+	respBody := string(respBodyBytes)
+
+	if authResp.StatusCode != http.StatusOK {
+		s.errorLog.Printf("Unauthorized request to %v (%v)", req.URL.Path, authResp.StatusCode)
+		http.Error(w, respBody, authResp.StatusCode)
+		return false
+	}
+
+	authDecoded := &imqsAuthResponse{}
+	if err = json.Unmarshal(respBodyBytes, authDecoded); err != nil {
+		s.errorLog.Printf("Error decoding imqsauth response: %v", err)
+		http.Error(w, "Error decoding imqsauth response", http.StatusInternalServerError)
+		return false
+	}
+
+	if !authDecoded.hasRole(requirePermission) {
+		s.errorLog.Printf("Unauthorized request to %v (identity does not have role %v)", req.URL.Path, requirePermission)
+		http.Error(w, "Insufficient permissions", http.StatusUnauthorized)
+		return false
+	}
+
+	//s.errorLog.Printf("Authorized request to %v", req.URL.Path)
+	//http.Error(w, fmt.Sprintf("You're alright! (%v)", respBody), http.StatusOK)
+
+	return true
 }
 
 func (s *Server) Stop() {
@@ -309,4 +348,74 @@ func (s *Server) Stop() {
 		s.listenerSecondary.Close()
 	}
 	s.waiter.Wait()
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+type imqsAuthResponse struct {
+	Identity string
+	Roles    []string // Array of integer roles, stored as strings
+}
+
+func (r *imqsAuthResponse) hasRole(role string) bool {
+	if role == "" {
+		return false
+	}
+	// role_string will be "2", or "34", etc.
+	for _, role_string := range r.Roles {
+		role_int, _ := strconv.Atoi(role_string)
+		if imqsauth_role2name[role_int] == role {
+			return true
+		}
+	}
+	return false
+}
+
+func copyCookieToMSHTTP(org *http.Cookie) *ms_http.Cookie {
+	c := &ms_http.Cookie{
+		Name:  org.Name,
+		Value: org.Value,
+	}
+	return c
+}
+
+func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			if k == "Location" {
+				v = strings.Replace(v, dstHost, srcHost, 1)
+			}
+			if k == "Connection" && v == "close" {
+				// See detailed explanation in top-level function comment
+				continue
+			}
+			dst.Add(k, v)
+		}
+	}
+}
+
+func copyheadersOut(src ms_http.Header, dst http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
+}
+
+func openLog(filename string, defaultWriter io.Writer) io.Writer {
+	if filename == "" {
+		return defaultWriter
+	}
+	return &lumberjack.Logger{
+		Filename:   filename,
+		MaxSize:    50, // megabytes
+		MaxBackups: 3,
+		MaxAge:     90, // days
+	}
+}
+
+func init() {
+	// This must be kept in sync with perms.go in imqsauth
+	imqsauth_role2name = make(map[int]string)
+	imqsauth_role2name[2] = "enabled"
 }
