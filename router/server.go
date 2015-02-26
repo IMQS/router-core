@@ -218,7 +218,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	copyheadersOut(resp.Header, w.Header())
+	copyheadersOut(resp.Header, w.Header(), srcHost, dstHost)
 	w.WriteHeader(resp.StatusCode)
 
 	if resp.Body != nil {
@@ -394,9 +394,12 @@ func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.
 	}
 }
 
-func copyheadersOut(src ms_http.Header, dst http.Header) {
+func copyheadersOut(src ms_http.Header, dst http.Header, srcHost, dstHost string) {
 	for k, vv := range src {
 		for _, v := range vv {
+			if k == "Location" {
+				v = strings.Replace(v, dstHost, srcHost, 1)
+			}
 			dst.Add(k, v)
 		}
 	}
