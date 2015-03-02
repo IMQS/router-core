@@ -397,9 +397,10 @@ func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.
 func copyheadersOut(src ms_http.Header, dst http.Header, srcHost, dstHost string) {
 	for k, vv := range src {
 		for _, v := range vv {
-			if k == "Location" {
-				v = strings.Replace(v, dstHost, srcHost, 1)
-			}
+			// if k == "Location" {
+			// 	fmt.Printf("Changed from %s to %s\n", dstHost, srcHost)
+			// 	v = strings.Replace(v, dstHost, srcHost, 1)
+			// }
 			dst.Add(k, v)
 		}
 	}
