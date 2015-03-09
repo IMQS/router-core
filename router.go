@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"github.com/IMQS/router-core/router"
-	"log"
 	"os"
 )
 
@@ -53,14 +52,7 @@ func realMain() (result int) {
 	}
 
 	handler := func() error {
-		httpPort := fmt.Sprintf(":%v", config.HTTP.GetPort())
-		httpPortSecondary := ""
-		if config.HTTP.SecondaryPort != 0 {
-			httpPortSecondary = fmt.Sprintf(":%v", config.HTTP.SecondaryPort)
-		}
-
-		log.Fatal(server.ListenAndServe(httpPort, httpPortSecondary))
-		return nil
+		return server.ListenAndServe()
 	}
 
 	handlerNoRet := func() {

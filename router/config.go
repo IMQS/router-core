@@ -20,6 +20,9 @@ Example configuration file:
 	"HTTP": {
 		"Port": 80,												Primary HTTP port
 		"SecondaryPort": 8080,									One can optionally listen for HTTP on two ports
+		"EnableHTTPS": true,									Enable HTTPS on port 443
+		"CertKeyFile": "c:/imqsbin/conf/ssl.key"				SSL private key
+		"CertFile": "c:/imqsbin/conf/ssl.crt"					SSL certificate file. Concatenation of your certificate with the CA certificate chain.
 		"DisableKeepAlive": true,								Controls http.Transport.DisableKeepAlive. Default = false
 		"MaxIdleConnections": 50,								Controls http.Transport.MaxIdleConnections. Default = 0 (uses Go std library default)
 		"ResponseHeaderTimeout": 60								Controls http.Transport.ResponseHeaderTimeout. Default = 0 (uses Go std library default)
@@ -79,6 +82,9 @@ type Config struct {
 type ConfigHTTP struct {
 	Port                  uint16
 	SecondaryPort         uint16
+	EnableHTTPS           bool
+	CertFile              string
+	CertKeyFile           string
 	DisableKeepAlive      bool
 	MaxIdleConnections    int
 	ResponseHeaderTimeout int
@@ -191,14 +197,34 @@ func (c *Config) Overlay(other *Config) {
 	if other.Proxy != "" {
 		c.Proxy = other.Proxy
 	}
+
+	// Logs
 	if other.AccessLog != "" {
 		c.AccessLog = other.AccessLog
 	}
 	if other.ErrorLog != "" {
 		c.ErrorLog = other.ErrorLog
 	}
+
 	if other.DebugRoutes {
 		c.DebugRoutes = other.DebugRoutes
+	}
+
+	// HTTP
+	if other.HTTP.Port != 0 {
+		c.HTTP.Port = other.HTTP.Port
+	}
+	if other.HTTP.SecondaryPort != 0 {
+		c.HTTP.SecondaryPort = other.HTTP.SecondaryPort
+	}
+	if other.HTTP.EnableHTTPS {
+		c.HTTP.EnableHTTPS = other.HTTP.EnableHTTPS
+	}
+	if other.HTTP.CertFile != "" {
+		c.HTTP.CertFile = other.HTTP.CertFile
+	}
+	if other.HTTP.CertKeyFile != "" {
+		c.HTTP.CertKeyFile = other.HTTP.CertKeyFile
 	}
 	if other.HTTP.DisableKeepAlive {
 		c.HTTP.DisableKeepAlive = other.HTTP.DisableKeepAlive
@@ -206,15 +232,10 @@ func (c *Config) Overlay(other *Config) {
 	if other.HTTP.MaxIdleConnections != 0 {
 		c.HTTP.MaxIdleConnections = other.HTTP.MaxIdleConnections
 	}
-	if other.HTTP.Port != 0 {
-		c.HTTP.Port = other.HTTP.Port
-	}
 	if other.HTTP.ResponseHeaderTimeout != 0 {
 		c.HTTP.ResponseHeaderTimeout = other.HTTP.ResponseHeaderTimeout
 	}
-	if other.HTTP.SecondaryPort != 0 {
-		c.HTTP.SecondaryPort = other.HTTP.SecondaryPort
-	}
+
 	for match, replace := range other.Routes {
 		c.Routes[match] = replace
 	}

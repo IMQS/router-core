@@ -1,7 +1,15 @@
 package router
 
+// NOTE: It feels wrong to have to copy stuff out of the standard library and in here.
+// Two places where we do that:
+// 1. createSSLListener()
+// 2. tcpKeepAliveListener
+// It would be good to get rid of that. I think the thing forcing our hand here is apachelog.
+
 import (
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"github.com/cespare/go-apachelog"
@@ -30,11 +38,13 @@ var imqsauth_role2name map[int]string
 type Server struct {
 	HttpServer        *http.Server
 	httpTransport     *ms_http.Transport
+	configHttp        ConfigHTTP
 	debugRoutes       bool
 	router            Router
 	errorLog          *log.Logger
 	listener          net.Listener
 	listenerSecondary net.Listener
+	listenerSSL       net.Listener
 	waiter            sync.WaitGroup
 	wsdlMatch         *regexp.Regexp // hack for serving static content
 }
@@ -49,6 +59,7 @@ func NewServer(config *Config) (*Server, error) {
 	}
 	var err error
 	s := &Server{}
+	s.configHttp = config.HTTP
 	s.HttpServer = &http.Server{}
 	s.HttpServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
 	s.debugRoutes = config.DebugRoutes
@@ -83,42 +94,123 @@ func NewServer(config *Config) (*Server, error) {
 }
 
 // Run the server
-func (s *Server) ListenAndServe(httpPort, httpPortSecondary string) error {
-	if httpPort == "" {
-		httpPort = ":http"
+func (s *Server) ListenAndServe() error {
+	httpPort := fmt.Sprintf(":%v", s.configHttp.GetPort())
+	httpPortSecondary := ""
+	if s.configHttp.SecondaryPort != 0 {
+		fmt.Sprintf(":%v", s.configHttp.SecondaryPort)
+	}
+	sslPort := ""
+	if s.configHttp.EnableHTTPS {
+		sslPort = ":https"
 	}
 
-	run := func(listener *net.Listener, port string, done chan error) {
+	listenAndRunHTTP := func(listener *net.Listener, port string, done chan error) {
 		var err error
 		for {
-			if *listener, err = net.Listen("tcp", port); err != nil {
-				s.errorLog.Printf("In Listen error : %s\n", err.Error())
+			var ln net.Listener
+			if ln, err = net.Listen("tcp", port); err != nil {
+				s.errorLog.Printf("net.Listen (port %v) error: %s\n", port, err.Error())
 				break
 			}
+			*listener = tcpKeepAliveListener{ln.(*net.TCPListener)}
 			err = s.HttpServer.Serve(*listener)
-			if err != nil {
-				if strings.Contains(err.Error(), "specified network name is no longer available") {
-					s.errorLog.Println("Restarting - error 64")
-				} else {
-					break
-				}
+			if !s.autoRestartAfterError(err) {
+				break
 			}
 		}
 		done <- err
 	}
 
-	var err error
-	err1 := make(chan error)
-	go run(&s.listener, httpPort, err1)
+	listenAndRunSSL := func(listener *net.Listener, done chan error) {
+		var err error
+		for {
+			var ln net.Listener
+			if ln, err = s.createSSLListener(); err != nil {
+				s.errorLog.Printf("createSSLListener error: %s\n", err.Error())
+				break
+			}
+			*listener = ln
+			err = s.HttpServer.Serve(*listener)
+			if !s.autoRestartAfterError(err) {
+				break
+			}
+		}
+		done <- err
+	}
+
+	var donePrimary, doneSecondary, doneSSL chan error
+	donePrimary = make(chan error)
+	go listenAndRunHTTP(&s.listener, httpPort, donePrimary)
 	if httpPortSecondary != "" {
-		err2 := make(chan error)
-		go run(&s.listenerSecondary, httpPortSecondary, err2)
-		err = <-err2
+		doneSecondary = make(chan error)
+		go listenAndRunHTTP(&s.listenerSecondary, httpPortSecondary, doneSecondary)
 	}
+	if sslPort != "" {
+		doneSSL = make(chan error)
+		go listenAndRunSSL(&s.listenerSSL, doneSSL)
+	}
+
+	// Wait for all potential listeners to finish
+	err := []error{}
+	if donePrimary != nil {
+		err = append(err, <-donePrimary)
+	}
+	if doneSecondary != nil {
+		err = append(err, <-doneSecondary)
+	}
+	if doneSSL != nil {
+		err = append(err, <-doneSSL)
+	}
+	if len(err) == 0 {
+		return errors.New("Server not configured to listen on any ports")
+	}
+	// Return the first non-nil error
+	for _, e := range err {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+func (s *Server) autoRestartAfterError(err error) bool {
 	if err == nil {
-		err = <-err1
+		// Is this really the right thing to do? I don't know anymore... [BMH 2015-03-06]
+		return true
 	}
-	return err
+	if strings.Contains(err.Error(), "specified network name is no longer available") {
+		s.errorLog.Println("Automatically restarting after receiving error 64")
+		return true
+	}
+	return false
+}
+
+func (s *Server) createSSLListener() (net.Listener, error) {
+	// This function was modelled on the code inside the standard library's ListenAndServeTLS()
+
+	config := &tls.Config{}
+	if config.NextProtos == nil {
+		config.NextProtos = []string{"http/1.1"}
+	}
+
+	if _, err := tls.LoadX509KeyPair(s.configHttp.CertFile, s.configHttp.CertKeyFile); err != nil {
+		return nil, fmt.Errorf("Error reading cert %v: %v", s.configHttp.CertFile, err)
+	}
+
+	var err error
+	config.Certificates = make([]tls.Certificate, 1)
+	config.Certificates[0], err = tls.LoadX509KeyPair(s.configHttp.CertFile, s.configHttp.CertKeyFile)
+	if err != nil {
+		return nil, err
+	}
+
+	ln, err := net.Listen("tcp", ":https")
+	if err != nil {
+		return nil, err
+	}
+
+	return tls.NewListener(tcpKeepAliveListener{ln.(*net.TCPListener)}, config), nil
 }
 
 // Detect illegal requests
@@ -347,6 +439,10 @@ func (s *Server) Stop() {
 	if s.listenerSecondary != nil {
 		s.listenerSecondary.Close()
 	}
+
+	if s.listenerSSL != nil {
+		s.listenerSSL.Close()
+	}
 	s.waiter.Wait()
 }
 
@@ -425,6 +521,22 @@ func openLog(filename string, defaultWriter io.Writer) io.Writer {
 		MaxBackups: 3,
 		MaxAge:     90, // days
 	}
+}
+
+// This is copied from the standard library.
+// See that for reference.
+type tcpKeepAliveListener struct {
+	*net.TCPListener
+}
+
+func (ln tcpKeepAliveListener) Accept() (c net.Conn, err error) {
+	tc, err := ln.AcceptTCP()
+	if err != nil {
+		return
+	}
+	tc.SetKeepAlive(true)
+	tc.SetKeepAlivePeriod(3 * time.Minute)
+	return tc, nil
 }
 
 func init() {
