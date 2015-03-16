@@ -218,7 +218,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	copyheadersOut(resp.Header, w.Header(), srcHost, dstHost)
+	copyheadersOut(dstHost, resp.Header, srcHost, w.Header(), req.TLS != nil)
 	w.WriteHeader(resp.StatusCode)
 
 	if resp.Body != nil {
@@ -383,7 +383,11 @@ func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.
 	for k, vv := range src {
 		for _, v := range vv {
 			if k == "Location" {
-				v = strings.Replace(v, dstHost, srcHost, 1)
+				// Example
+				// Original  Location		http://example.com/files/abc
+				// Rewritten Location		http://127.0.0.1:2005/abc
+				// -- I'm not sure why we do this -- If in doubt, just delete this. It seems wrong.
+				v = strings.Replace(v, srcHost, dstHost, 1)
 			}
 			if k == "Connection" && v == "close" {
 				// See detailed explanation in top-level function comment
@@ -394,13 +398,18 @@ func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.
 	}
 }
 
-func copyheadersOut(src ms_http.Header, dst http.Header, srcHost, dstHost string) {
+func copyheadersOut(srcHost string, src ms_http.Header, dstHost string, dst http.Header, isHTTPS bool) {
 	for k, vv := range src {
 		for _, v := range vv {
-			// if k == "Location" {
-			// 	fmt.Printf("Changed from %s to %s\n", dstHost, srcHost)
-			// 	v = strings.Replace(v, dstHost, srcHost, 1)
-			// }
+			if k == "Location" {
+				// Some servers will send a Location header, but that Location will be an internal network address, so we
+				// need to rewrite it to be an external address. It may be wiser to just stripe the absolute portion of Location away,
+				// just leaving a relative URL. This is all for Yellowfin's sake.
+				v = strings.Replace(v, srcHost, dstHost, 1)
+				if isHTTPS && strings.Index(v, "http:") == 0 {
+					v = strings.Replace(v, "http:", "https:", 1)
+				}
+			}
 			dst.Add(k, v)
 		}
 	}
