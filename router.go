@@ -24,6 +24,7 @@ func realMain() (result int) {
 	flags := flag.NewFlagSet("router", flag.ExitOnError)
 	mainconfig := flags.String("mainconfig", "", "main config file")
 	auxconfig := flags.String("auxconfig", "", "auxiliary config file, overlayed onto main")
+	showHttpPort := flags.Bool("show-http-port", false, "print the http port to stdout and exit")
 
 	if len(os.Args) > 1 {
 		flags.Parse(os.Args[1:])
@@ -44,6 +45,12 @@ func realMain() (result int) {
 			panic(fmt.Errorf("Error loading %v: %v", *auxconfig, err))
 		}
 		config.Overlay(&aux)
+	}
+
+	if *showHttpPort {
+		fmt.Printf("%v", config.HTTP.GetPort())
+		result = 0
+		return
 	}
 
 	server, err := router.NewServer(config)
