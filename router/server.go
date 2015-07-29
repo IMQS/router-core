@@ -11,13 +11,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/IMQS/log"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
-	"github.com/cespare/go-apachelog"
-	"github.com/natefinch/lumberjack"
+	"github.com/cespare/hutil/apachelog"
 	"golang.org/x/net/websocket"
+	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -51,24 +51,14 @@ type Server struct {
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
 func NewServer(config *Config) (*Server, error) {
-	if config.AccessLog == "" {
-		return nil, fmt.Errorf("You must specify an AccessLog file")
-	}
-	if config.ErrorLog == "" {
-		return nil, fmt.Errorf("You must specify an ErrorLog file")
-	}
 	var err error
 	s := &Server{}
 	s.configHttp = config.HTTP
 	s.HttpServer = &http.Server{}
-	s.HttpServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
+	s.HttpServer.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, openLog(config.AccessLog, os.Stdout))
 	s.debugRoutes = config.DebugRoutes
 
-	logFlags := log.Ldate | log.Ltime | log.Lmicroseconds
-	errorLog := openLog(config.ErrorLog, os.Stderr)
-	s.errorLog = log.New(errorLog, "", logFlags)
-	log.SetOutput(errorLog)
-	log.SetFlags(logFlags)
+	s.errorLog = log.New(pickLogfile(config.ErrorLog))
 
 	if s.router, err = NewRouter(config); err != nil {
 		return nil, err
@@ -84,11 +74,10 @@ func NewServer(config *Config) (*Server, error) {
 		return s.router.GetProxy(req)
 	}
 
-	s.errorLog.Print("Starting v0.03 with:")
-	s.errorLog.Printf(" DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
-
-	s.errorLog.Printf(" MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
-	s.errorLog.Printf(" ResponseHeaderTimeout: %v", config.HTTP.ResponseHeaderTimeout)
+	s.errorLog.Info("Starting v0.03 with:")
+	s.errorLog.Infof("DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
+	s.errorLog.Infof("MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
+	s.errorLog.Infof("ResponseHeaderTimeout: %v", config.HTTP.ResponseHeaderTimeout)
 	s.wsdlMatch = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
 }
@@ -110,7 +99,7 @@ func (s *Server) ListenAndServe() error {
 		for {
 			var ln net.Listener
 			if ln, err = net.Listen("tcp", port); err != nil {
-				s.errorLog.Printf("net.Listen (port %v) error: %s\n", port, err.Error())
+				s.errorLog.Errorf("net.Listen (port %v) error: %s\n", port, err.Error())
 				break
 			}
 			*listener = tcpKeepAliveListener{ln.(*net.TCPListener)}
@@ -127,7 +116,7 @@ func (s *Server) ListenAndServe() error {
 		for {
 			var ln net.Listener
 			if ln, err = s.createSSLListener(); err != nil {
-				s.errorLog.Printf("createSSLListener error: %s\n", err.Error())
+				s.errorLog.Errorf("createSSLListener error: %s\n", err.Error())
 				break
 			}
 			*listener = ln
@@ -174,13 +163,20 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
+func pickLogfile(logfile string) string {
+	if logfile != "" {
+		return logfile
+	}
+	return log.Stdout
+}
+
 func (s *Server) autoRestartAfterError(err error) bool {
 	if err == nil {
 		// Is this really the right thing to do? I don't know anymore... [BMH 2015-03-06]
 		return true
 	}
 	if strings.Contains(err.Error(), "specified network name is no longer available") {
-		s.errorLog.Println("Automatically restarting after receiving error 64")
+		s.errorLog.Warnf("Automatically restarting after receiving error 64")
 		return true
 	}
 	return false
@@ -217,7 +213,7 @@ func (s *Server) createSSLListener() (net.Listener, error) {
 func (s *Server) isLegalRequest(req *http.Request) bool {
 	// We were getting a whole lot of requests to the 'telco' server where the hostname was "yahoo.mail.com".
 	if req.URL.Host == "yahoo.mail.com" {
-		s.errorLog.Printf("Illegal hostname (%s) - closing connection", req.URL.Host)
+		s.errorLog.Errorf("Illegal hostname (%s) - closing connection", req.URL.Host)
 		return false
 	}
 	return true
@@ -248,7 +244,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	newurl, requirePermission, passThroughAuth := s.router.ProcessRoute(req.URL)
 
 	if s.debugRoutes {
-		s.errorLog.Printf("(%v) -> (%v)", req.RequestURI, newurl)
+		s.errorLog.Infof("(%v) -> (%v)", req.RequestURI, newurl)
 	}
 
 	if newurl == "" {
@@ -306,7 +302,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 
 	resp, err := s.httpTransport.RoundTrip(cleaned)
 	if err != nil {
-		s.errorLog.Println("HTTP RoundTrip error: " + err.Error())
+		s.errorLog.Info("HTTP RoundTrip error: " + err.Error())
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
@@ -327,12 +323,12 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 		origin := "http://localhost"
 		config, errCfg := websocket.NewConfig(newurl, origin)
 		if errCfg != nil {
-			s.errorLog.Printf("Error with config: %v\n", errCfg.Error())
+			s.errorLog.Errorf("Error with config: %v\n", errCfg)
 			return
 		}
 		backend, errOpen := websocket.DialConfig(config)
 		if errOpen != nil {
-			s.errorLog.Printf("Error with websocket.DialConfig: %v\n", errOpen.Error())
+			s.errorLog.Errorf("Error with websocket.DialConfig: %v\n", errOpen)
 			return
 		}
 		copy := func(fromSocket *websocket.Conn, toSocket *websocket.Conn, toBackend bool, done chan bool) {
@@ -342,7 +338,7 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 				var err error
 				err = websocket.Message.Receive(fromSocket, &data)
 				if err == io.EOF {
-					s.errorLog.Printf("Closing connection. EOF")
+					s.errorLog.Errorf("Closing connection. EOF")
 					fromSocket.Close()
 					toSocket.Close()
 					break
@@ -396,7 +392,7 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 
 	authResp, err := s.httpTransport.RoundTrip(authReq)
 	if err != nil {
-		s.errorLog.Println("HTTP RoundTrip error: " + err.Error())
+		s.errorLog.Errorf("HTTP RoundTrip error: %v", err)
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return false
 	}
@@ -406,20 +402,20 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 	respBody := string(respBodyBytes)
 
 	if authResp.StatusCode != http.StatusOK {
-		s.errorLog.Printf("Unauthorized request to %v (%v)", req.URL.Path, authResp.StatusCode)
+		s.errorLog.Infof("Unauthorized request to %v (%v)", req.URL.Path, authResp.StatusCode)
 		http.Error(w, respBody, authResp.StatusCode)
 		return false
 	}
 
 	authDecoded := &imqsAuthResponse{}
 	if err = json.Unmarshal(respBodyBytes, authDecoded); err != nil {
-		s.errorLog.Printf("Error decoding imqsauth response: %v", err)
+		s.errorLog.Errorf("Error decoding imqsauth response: %v", err)
 		http.Error(w, "Error decoding imqsauth response", http.StatusInternalServerError)
 		return false
 	}
 
 	if !authDecoded.hasRole(requirePermission) {
-		s.errorLog.Printf("Unauthorized request to %v (identity does not have role %v)", req.URL.Path, requirePermission)
+		s.errorLog.Infof("Unauthorized request to %v (identity does not have role %v)", req.URL.Path, requirePermission)
 		http.Error(w, "Insufficient permissions", http.StatusUnauthorized)
 		return false
 	}
@@ -431,7 +427,7 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 }
 
 func (s *Server) Stop() {
-	s.errorLog.Println("Shutting down...")
+	s.errorLog.Info("Shutting down")
 	if s.listener != nil {
 		s.listener.Close()
 	}

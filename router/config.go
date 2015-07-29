@@ -14,8 +14,8 @@ Example configuration file:
 
 {
 	"Proxy": "http://192.168.1.1:1234",							This is used to route any targets that specify UseProxy: true
-	"AccessLog": "c:/imqsvar/logs/router-access.log",			The access log file
-	"ErrorLog": "c:/imqsvar/logs/router-error.log",				The error log file
+	"AccessLog": "c:/imqsvar/logs/router-access.log",			The access log file. If empty, defaults to 'stdout'.
+	"ErrorLog": "c:/imqsvar/logs/router-error.log",				The error log file. If empty, defaults to 'stderr'.
 	"DebugRoutes": true,										Log every match attempt to the error log.
 	"HTTP": {
 		"Port": 80,												Primary HTTP port

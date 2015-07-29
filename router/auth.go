@@ -3,9 +3,9 @@ package router
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/IMQS/log"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -61,11 +61,11 @@ func authInjectPureHub(log *log.Logger, w http.ResponseWriter, req *http.Request
 			// Acquire a new token
 			err := pureHubGetToken(log, target)
 			if err != nil {
-				log.Printf("Error acquiring PureHub authentication token: %v", err)
+				log.Infof("Error acquiring PureHub authentication token: %v", err)
 				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return false
 			}
-			log.Printf("Success acquiring PureHub authentication token")
+			log.Infof("Success acquiring PureHub authentication token")
 			inject()
 		}
 
