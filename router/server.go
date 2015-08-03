@@ -13,7 +13,8 @@ import (
 	"fmt"
 	"github.com/IMQS/log"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
-	"github.com/cespare/hutil/apachelog"
+	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
+	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
@@ -55,9 +56,14 @@ func NewServer(config *Config) (*Server, error) {
 	s := &Server{}
 	s.configHttp = config.HTTP
 	s.HttpServer = &http.Server{}
-	s.HttpServer.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, openLog(config.AccessLog, os.Stdout))
-	s.debugRoutes = config.DebugRoutes
 
+	// Using newer apachelog
+	//s.HttpServer.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, openLog(config.AccessLog, os.Stdout))
+
+	// Using older apachelog
+	s.HttpServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
+
+	s.debugRoutes = config.DebugRoutes
 	s.errorLog = log.New(pickLogfile(config.ErrorLog))
 
 	if s.router, err = NewRouter(config); err != nil {
