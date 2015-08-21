@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/IMQS/log"
+	"github.com/IMQS/serviceauth"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
 	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
@@ -374,11 +375,15 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 }
 
 // Returns true if the request should continue to be passed through the router
-// We make a roun-trip to imqsauth here to check the credentials of the incoming request.
+// We make a round-trip to imqsauth here to check the credentials of the incoming request.
 // This adds about a 0.5ms latency to the request. It might be worthwhile to embed
 // imqsauth inside imqsrouter.
 func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePermission string) bool {
 	if requirePermission == "" {
+		return true
+	}
+
+	if err := serviceauth.VerifyInterServiceRequest(req); err == nil {
 		return true
 	}
 
