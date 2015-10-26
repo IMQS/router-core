@@ -259,11 +259,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if !s.authorize(w, req, requirePermission) {
+	authData, authOK := s.authorize(w, req, requirePermission)
+	if !authOK {
 		return
 	}
 
-	if !authPassThrough(s.errorLog, w, req, passThroughAuth) {
+	if !authPassThrough(s.errorLog, w, req, authData, passThroughAuth) {
 		return
 	}
 
@@ -378,15 +379,16 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 // We make a round-trip to imqsauth here to check the credentials of the incoming request.
 // This adds about a 0.5ms latency to the request. It might be worthwhile to embed
 // imqsauth inside imqsrouter.
-func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePermission string) bool {
+func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePermission string) (authData *imqsAuthResponse, authOK bool) {
 	if requirePermission == "" {
-		return true
+		return nil, true
 	}
 
 	if err := serviceauth.VerifyInterServiceRequest(req); err == nil {
-		return true
+		return nil, true
 	}
 
+	// Ask imqsauth
 	authReq, err := ms_http.NewRequest("GET", imqsauth_url+"/check", nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -405,7 +407,7 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 	if err != nil {
 		s.errorLog.Errorf("HTTP RoundTrip error: %v", err)
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
-		return false
+		return nil, false
 	}
 	defer authResp.Body.Close()
 
@@ -415,26 +417,26 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 	if authResp.StatusCode != http.StatusOK {
 		s.errorLog.Infof("Unauthorized request to %v (%v)", req.URL.Path, authResp.StatusCode)
 		http.Error(w, respBody, authResp.StatusCode)
-		return false
+		return nil, false
 	}
 
 	authDecoded := &imqsAuthResponse{}
 	if err = json.Unmarshal(respBodyBytes, authDecoded); err != nil {
 		s.errorLog.Errorf("Error decoding imqsauth response: %v", err)
 		http.Error(w, "Error decoding imqsauth response", http.StatusInternalServerError)
-		return false
+		return nil, false
 	}
 
 	if !authDecoded.hasRole(requirePermission) {
 		s.errorLog.Infof("Unauthorized request to %v (identity does not have role %v)", req.URL.Path, requirePermission)
 		http.Error(w, "Insufficient permissions", http.StatusUnauthorized)
-		return false
+		return nil, false
 	}
 
 	//s.errorLog.Printf("Authorized request to %v", req.URL.Path)
 	//http.Error(w, fmt.Sprintf("You're alright! (%v)", respBody), http.StatusOK)
 
-	return true
+	return authDecoded, true
 }
 
 func (s *Server) Stop() {

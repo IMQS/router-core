@@ -41,6 +41,13 @@ Example configuration file:
 				"Username": "username@example.com",
 				"Password": "mypassword"
 			}
+		},
+		"YELLOWFIN": {											Demonstrates the "Yellowfin" transparent authentication system
+			"URL": "http://yellowfinserver.example.com",
+			"RequirePermission": "enabled",
+			"PassThroughAuth": {
+				"Type": "Yellowfin"
+			}
 		}
 	},
 	"Routes": {
@@ -48,7 +55,8 @@ Example configuration file:
 		"/themes/(.*)": "{MAPS}/theme/$1",						If you use a named target, like {MAPS}, then it must be the first part of the replacement string.
 		"/docs/(.*)": "https://docs.example.com/$1",
 		"/about/(.*)": "http://127.0.0.1:2001/$1",
-		"/3rdparty/(.*)": "{THIRDPARTY}/$1",					Transparent authentication
+		"/3rdparty/(.*)": "{THIRDPARTY}/$1",					Transparent authentication to PureHub
+		"/yellowfin/(.*)": "{YELLOWFIN}/$1",					Transparent authentication to Yellowfin
 		"/telemetry/(.*)": "ws://127.0.0.1:2001/$1",			Websocket target
 		"/(.*)": "http://127.0.0.1/www/$1"						This will end up catching anything that doesn't match one of the more specific routes
 	},
@@ -65,8 +73,9 @@ in terms of the number of slashes in the prefix, is 10. In other words prefixes 
 type AuthPassThroughType string
 
 const (
-	AuthPassThroughNone    AuthPassThroughType = ""
-	AuthPassThroughPureHub                     = "PureHub"
+	AuthPassThroughNone      AuthPassThroughType = ""
+	AuthPassThroughPureHub                       = "PureHub"
+	AuthPassThroughYellowfin                     = "Yellowfin"
 )
 
 type Config struct {

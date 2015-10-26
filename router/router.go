@@ -27,11 +27,24 @@ type target struct {
 	auth              targetPassThroughAuth // Special authentication rules for this target
 }
 
+/*
+Usage of targetPassThroughAuth fields:
+
+PureHub:
+	token
+	tokenExpires
+
+Yellowfin:
+	tokenMap
+	tokenLock
+*/
 type targetPassThroughAuth struct {
+	lock         sync.RWMutex // Guards access to all state except for "config", which is immutable
 	config       ConfigPassThroughAuth
-	token        string
-	tokenExpires time.Time
-	lock         sync.RWMutex
+	token        string                 // A single token shared by all users of the system. "machine to machine", without any user-specific session.
+	tokenExpires time.Time              // Expiry date of 'token'
+	tokenMap     map[string]interface{} // Map from username to token. For user-specific sessions with another machine.
+	tokenLock    map[string]bool        // If an entry exists in here for a username, then we are busy trying to log that user in.
 }
 
 // A route that maps from incoming URL to a target URL
@@ -67,6 +80,13 @@ type routeSet struct {
 	// The following state is computed from 'routes'.
 	prefixHash    map[string]*route // Keys are everything up to the first open parenthesis character '('
 	prefixLengths []int             // Descending list of unique prefix lengths
+}
+
+func newTarget() *target {
+	t := &target{}
+	t.auth.tokenMap = make(map[string]interface{})
+	t.auth.tokenLock = make(map[string]bool)
+	return t
 }
 
 // The Router interface is responsible for taking an incoming request and rewriting it
@@ -159,7 +179,7 @@ func NewRouter(config *Config) (Router, error) {
 
 	targets := map[string]*target{}
 	for name, ctarget := range config.Targets {
-		t := &target{}
+		t := newTarget()
 		t.baseUrl = ctarget.URL
 		t.useProxy = ctarget.UseProxy
 		t.requirePermission = ctarget.RequirePermission
@@ -178,7 +198,7 @@ func NewRouter(config *Config) (Router, error) {
 			route.target = targets[named_target]
 			route.replace = named_suffix
 		} else {
-			route.target = &target{}
+			route.target = newTarget()
 			route.target.useProxy = false
 			route.target.baseUrl = ""
 			route.replace = replace
