@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"github.com/IMQS/log"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"net/url"
 	"regexp"
@@ -78,8 +79,9 @@ type routeSet struct {
 	/////////////////////////////////////////////////
 	// Cached state.
 	// The following state is computed from 'routes'.
-	prefixHash    map[string]*route // Keys are everything up to the first open parenthesis character '('
-	prefixLengths []int             // Descending list of unique prefix lengths
+	prefixHash    map[string]*route  // Keys are everything up to the first open parenthesis character '('
+	prefixLengths []int              // Descending list of unique prefix lengths
+	targetHash    map[string]*target // Keys are the hostname for each of the target routes setup in config
 }
 
 func newTarget() *target {
@@ -95,12 +97,13 @@ type Router interface {
 	// Rewrite an incoming request. If newurl is a blank string, then the URL does not match any route.
 	ProcessRoute(uri *url.URL) (newurl string, requirePermission string, passThroughAuth *targetPassThroughAuth)
 	// Return the URL of a proxy to use for a given request
-	GetProxy(req *ms_http.Request) (*url.URL, error)
+	GetProxy(errLog *log.Logger, req *ms_http.Request) (*url.URL, error)
 }
 
 func (r *routeSet) computeCaches() error {
 	allLengths := map[int]bool{}
 	r.prefixHash = make(map[string]*route)
+	r.targetHash = make(map[string]*target)
 	for _, route := range r.routes {
 		openParen := strings.Index(route.match, "(")
 		key := ""
@@ -111,6 +114,15 @@ func (r *routeSet) computeCaches() error {
 			key = route.match[:openParen]
 		}
 		r.prefixHash[key] = route
+
+		parsedUrl, errUrl := url.Parse(route.target.baseUrl)
+		if errUrl != nil {
+			return fmt.Errorf("Target URL format incorrect %v:%v", route.target.baseUrl, errUrl)
+		}
+		if parsedUrl.Host != "" {
+			r.targetHash[parsedUrl.Host] = route.target
+		}
+
 		allLengths[len(key)] = true
 		var err error
 		route.match_re, err = regexp.Compile(route.match)
@@ -140,9 +152,12 @@ func (r *routeSet) ProcessRoute(uri *url.URL) (newurl string, requirePermission 
 	return rewritten, route.target.requirePermission, &route.target.auth
 }
 
-func (r *routeSet) GetProxy(req *ms_http.Request) (*url.URL, error) {
-	route := r.match(req.URL)
-	if route == nil || !route.target.useProxy {
+func (r *routeSet) GetProxy(errLog *log.Logger, req *ms_http.Request) (*url.URL, error) {
+	if r.targetHash[req.URL.Host] == nil {
+		errLog.Errorf("Nil target pointer found in hash for host %v", req.URL.Host)
+		return nil, nil
+	}
+	if !r.targetHash[req.URL.Host].useProxy {
 		return nil, nil
 	}
 	return r.proxy, nil

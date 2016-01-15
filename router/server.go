@@ -78,7 +78,7 @@ func NewServer(config *Config) (*Server, error) {
 		ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
 	}
 	s.httpTransport.Proxy = func(req *ms_http.Request) (*url.URL, error) {
-		return s.router.GetProxy(req)
+		return s.router.GetProxy(s.errorLog, req)
 	}
 
 	s.errorLog.Info("Starting v0.03 with:")
