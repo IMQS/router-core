@@ -8,7 +8,6 @@ package router
 
 import (
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/IMQS/log"
@@ -19,22 +18,15 @@ import (
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
-
-const imqsauth_url = "http://127.0.0.1:2003"
-const imqsauth_cookie = "session"
-
-var imqsauth_role2name map[int]string
 
 // Router Server
 type Server struct {
@@ -379,7 +371,7 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 // We make a round-trip to imqsauth here to check the credentials of the incoming request.
 // This adds about a 0.5ms latency to the request. It might be worthwhile to embed
 // imqsauth inside imqsrouter.
-func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePermission string) (authData *imqsAuthResponse, authOK bool) {
+func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePermission string) (authData *serviceauth.ImqsAuthResponse, authOK bool) {
 	if requirePermission == "" {
 		return nil, true
 	}
@@ -388,55 +380,17 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 		return nil, true
 	}
 
-	// Ask imqsauth
-	authReq, err := ms_http.NewRequest("GET", imqsauth_url+"/check", nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-
-	headAuth := req.Header.Get("Authorization")
-	if headAuth != "" {
-		authReq.Header.Set("Authorization", headAuth)
-	}
-	cookieSession, _ := req.Cookie(imqsauth_cookie)
-	if cookieSession != nil {
-		authReq.AddCookie(copyCookieToMSHTTP(cookieSession))
-	}
-
-	authResp, err := s.httpTransport.RoundTrip(authReq)
-	if err != nil {
-		s.errorLog.Errorf("HTTP RoundTrip error: %v", err)
-		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+	if httpCode, errorMsg, authData := serviceauth.VerifyUserHasPermission(req, requirePermission); httpCode == http.StatusOK {
+		return authData, true
+	} else { // Not OK
+		if httpCode == http.StatusUnauthorized {
+			s.errorLog.Info(errorMsg) // we expect some unauthorized requests, so don't log them as errors
+		} else {
+			s.errorLog.Error(errorMsg)
+		}
+		http.Error(w, errorMsg, httpCode)
 		return nil, false
 	}
-	defer authResp.Body.Close()
-
-	respBodyBytes, _ := ioutil.ReadAll(authResp.Body)
-	respBody := string(respBodyBytes)
-
-	if authResp.StatusCode != http.StatusOK {
-		s.errorLog.Infof("Unauthorized request to %v (%v)", req.URL.Path, authResp.StatusCode)
-		http.Error(w, respBody, authResp.StatusCode)
-		return nil, false
-	}
-
-	authDecoded := &imqsAuthResponse{}
-	if err = json.Unmarshal(respBodyBytes, authDecoded); err != nil {
-		s.errorLog.Errorf("Error decoding imqsauth response: %v", err)
-		http.Error(w, "Error decoding imqsauth response", http.StatusInternalServerError)
-		return nil, false
-	}
-
-	if !authDecoded.hasRole(requirePermission) {
-		s.errorLog.Infof("Unauthorized request to %v (identity does not have role %v)", req.URL.Path, requirePermission)
-		http.Error(w, "Insufficient permissions", http.StatusUnauthorized)
-		return nil, false
-	}
-
-	//s.errorLog.Printf("Authorized request to %v", req.URL.Path)
-	//http.Error(w, fmt.Sprintf("You're alright! (%v)", respBody), http.StatusOK)
-
-	return authDecoded, true
 }
 
 func (s *Server) Stop() {
@@ -456,25 +410,6 @@ func (s *Server) Stop() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-type imqsAuthResponse struct {
-	Identity string
-	Roles    []string // Array of integer roles, stored as strings
-}
-
-func (r *imqsAuthResponse) hasRole(role string) bool {
-	if role == "" {
-		return false
-	}
-	// role_string will be "2", or "34", etc.
-	for _, role_string := range r.Roles {
-		role_int, _ := strconv.Atoi(role_string)
-		if imqsauth_role2name[role_int] == role {
-			return true
-		}
-	}
-	return false
-}
 
 func copyCookieToMSHTTP(org *http.Cookie) *ms_http.Cookie {
 	c := &ms_http.Cookie{
@@ -549,7 +484,4 @@ func (ln tcpKeepAliveListener) Accept() (c net.Conn, err error) {
 }
 
 func init() {
-	// This must be kept in sync with perms.go in imqsauth
-	imqsauth_role2name = make(map[int]string)
-	imqsauth_role2name[2] = "enabled"
 }

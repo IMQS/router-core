@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/IMQS/log"
+	"github.com/IMQS/serviceauth"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"io/ioutil"
 	"net/http"
@@ -37,7 +38,7 @@ type yellowfinToken struct {
 
 // Returns true if the request should continue to be passed through the router
 // If you return false, then you must already have sent an appropriate error response to 'w'.
-func authPassThrough(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *imqsAuthResponse, target *targetPassThroughAuth) bool {
+func authPassThrough(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *serviceauth.ImqsAuthResponse, target *targetPassThroughAuth) bool {
 	switch target.config.Type {
 	case AuthPassThroughNone:
 		return true
@@ -113,7 +114,7 @@ func pureHubGetToken(log *log.Logger, target *targetPassThroughAuth) error {
 	return err
 }
 
-func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *imqsAuthResponse, target *targetPassThroughAuth) bool {
+func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *serviceauth.ImqsAuthResponse, target *targetPassThroughAuth) bool {
 	if authData == nil {
 		log.Errorf("For Yellowfin transparent authentication, you must also enforce authorization")
 		http.Error(w, "Not authorized", http.StatusUnauthorized)
@@ -199,8 +200,8 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 	return false
 }
 
-func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *imqsAuthResponse) *yellowfinToken {
-	authReq, err := ms_http.NewRequest("POST", imqsauth_url+"/login_yellowfin", nil)
+func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *serviceauth.ImqsAuthResponse) *yellowfinToken {
+	authReq, err := ms_http.NewRequest("POST", serviceauth.Imqsauth_url+"/login_yellowfin", nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil
@@ -210,7 +211,7 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 	if headAuth != "" {
 		authReq.Header.Set("Authorization", headAuth)
 	}
-	cookieSession, _ := req.Cookie(imqsauth_cookie)
+	cookieSession, _ := req.Cookie(serviceauth.Imqsauth_cookie)
 	if cookieSession != nil {
 		authReq.AddCookie(copyCookieToMSHTTP(cookieSession))
 	}
