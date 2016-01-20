@@ -32,9 +32,24 @@ type pureHubAuthResponse struct {
 // This is stored in the 'value' part of targetPassThroughAuth.tokenMap
 // The key is the user identity
 type yellowfinToken struct {
+	Expires    time.Time
 	JSESSIONID string
 	IPID       string
 }
+
+// We configure Yellowfin so that internally, it's sessions expire after 31 days.
+// However, if the Yellowfin service gets restarted, then Yellowfin discards it's sessions.
+// We're probably OK for now, because in regular production, Yellowfin will not get
+// restarted on it's own. All services get restarted whenever an update is performed.
+// Initially I tried making this timeout short, but that has the downside that the
+// existing yellowfin iframe sessions get screwed around. I don't know what causes this,
+// but my guess is that it's due to session information encoded in the URL of requests.
+// So, the conservative thing to do is to make the timeouts as long as possible. If the
+// user goes back to the IMQS home screen, and then from there renavigates to a report,
+// then the relogin works as intended. But if he clicks around within the Yellowfin iframe,
+// and the session token expires during those clicks, then we start to see broken
+// behaviour from yellowfin.
+const yellowfinTokenLifetime = 30 * 24 * time.Hour
 
 // Returns true if the request should continue to be passed through the router
 // If you return false, then you must already have sent an appropriate error response to 'w'.
@@ -151,10 +166,10 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		// -- Fetch cached token --
 		done := false
 		target.lock.RLock()
-		token_g := target.tokenMap[authData.Identity]
-		if token_g != nil {
+		token_yf, exists := target.tokenMap[authData.Identity].(*yellowfinToken)
+		if exists && token_yf.Expires.After(time.Now()) {
 			done = true
-			inject(token_g.(*yellowfinToken))
+			inject(token_yf)
 		}
 		target.lock.RUnlock()
 		if done {
@@ -230,7 +245,9 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 		return nil
 	}
 
-	token := &yellowfinToken{}
+	token := &yellowfinToken{
+		Expires: time.Now().Add(yellowfinTokenLifetime),
+	}
 	for _, c := range authResp.Cookies() {
 		switch c.Name {
 		case "JSESSIONID":

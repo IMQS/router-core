@@ -19,7 +19,7 @@ In order to keep the code simple, we always use the Microsoft net/http fork as
 our HTTP roundtripper. We'll have to keep an eye on this, to make sure that we stay up
 to date with any changes in the Go standard library.
 
-Authentication Middle Man
+Authentication Pass-Through
 
 The router supports acting as an authenticating proxy, where the authentication information
 is stored on the server. This is used in scenarios where a client does not want to
@@ -30,6 +30,20 @@ for specific IMQS users, via Authaus permission bits.
 The router automatically logs in to the backend authentication service, and stores the
 session tokens in RAM. Future requests to that same backend automatically get the
 session token added into the HTTP headers before forwarding the request.
+
+Known issues:
+
+The pass-through authentication does not handle the situation where the backend has cleared it's
+store of session tokens. For example, if one was to login to Yellowfin, and then Yellowfin gets
+restarted, and consequently forgets it's session tokens, the router would not realize that our
+own cached tokens are now invalid. To solve this, one would need to implement a check inside
+ServeHTTP(), which would monitor expected error responses such as 401, and then force the
+pass-through authentication system to discard it's cached information. I tried implementing this,
+assuming that Yellowfin would return a 401 upon receiving an unauthorized request. However, it does
+not do this. Instead, it sends back a login page. In order to detect this, one would need to
+perform deep inspection on the response body, which is something I'd rather not do unless it
+is absolutely necessary. So, we rely instead on expiring session tokens ourselves, and hope
+that Yellowfin is not restarted without the router also being restarted.
 
 */
 package router
