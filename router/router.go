@@ -213,10 +213,14 @@ func NewRouter(config *Config) (Router, error) {
 			route.target = targets[named_target]
 			route.replace = named_suffix
 		} else {
+			parsedUrl, errUrl := url.Parse(replace)
+			if errUrl != nil {
+				return nil, fmt.Errorf("Route replacement URL format incorrect %v:%v", replace, errUrl)
+			}
 			route.target = newTarget()
 			route.target.useProxy = false
-			route.target.baseUrl = ""
-			route.replace = replace
+			route.target.baseUrl = parsedUrl.Scheme + "://" + parsedUrl.Host
+			route.replace = parsedUrl.Path
 		}
 		rs.routes = append(rs.routes, route)
 	}
