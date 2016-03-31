@@ -219,7 +219,7 @@ func (s *Server) isLegalRequest(req *http.Request) bool {
 }
 
 /*
-ServeHTTP is the single router access point to the frondoor server. All request are handled in this method.
+ServeHTTP is the single router access point to the frontdoor server. All request are handled in this method.
  It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
 between these pipes.
 */
@@ -319,9 +319,11 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 forwardWebsocket does for websockets what forwardHTTP does for http requests. A new socket connection is made to the backend and messages are forwarded both ways.
 */
 func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newurl string) {
+
 	myHandler := func(con *websocket.Conn) {
 		origin := "http://localhost"
 		config, errCfg := websocket.NewConfig(newurl, origin)
+		copyHeaders(req.Header, config.Header)
 		if errCfg != nil {
 			s.errorLog.Errorf("Error with config: %v\n", errCfg)
 			return
@@ -450,6 +452,15 @@ func copyheadersOut(srcHost string, src ms_http.Header, dstHost string, dst http
 					v = strings.Replace(v, "http:", "https:", 1)
 				}
 			}
+			dst.Add(k, v)
+		}
+	}
+}
+
+//copy all headers from src to dst
+func copyHeaders(src http.Header, dst http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
 			dst.Add(k, v)
 		}
 	}
