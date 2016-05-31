@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/IMQS/log"
@@ -29,12 +30,19 @@ type pureHubAuthResponse struct {
 	Expires     string `json:".expires"`
 }
 
+// Parameters to set when logging into YF
+type yellowfinLoginParameters struct {
+	ModuleFilter   string
+	ScenarioFilter string
+}
+
 // This is stored in the 'value' part of targetPassThroughAuth.tokenMap
 // The key is the user identity
 type yellowfinToken struct {
 	Expires    time.Time
 	JSESSIONID string
 	IPID       string
+	Parameters yellowfinLoginParameters
 }
 
 // We configure Yellowfin so that internally, it's sessions expire after 31 days.
@@ -136,6 +144,34 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		return false
 	}
 
+	// Used to configure extra parameters present in YF logins
+	if req.URL.Path == "/yellowfin/loginparameters" {
+		errorResponse := func(err error) {
+			log.Errorf("Error parsing yf login paramters: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+
+		bodyData, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			errorResponse(err)
+			return false
+		}
+		var params yellowfinLoginParameters
+		err = json.Unmarshal(bodyData, &params)
+		if err != nil {
+			errorResponse(err)
+			return false
+		}
+
+		// Invalidate user token by expiring session.
+		// We also preset a new future session with the given YF parameters.
+		target.lock.Lock()
+		target.tokenMap[authData.Identity] = &yellowfinToken{Expires: time.Now().Add(-1 * time.Second), Parameters: params}
+		target.lock.Unlock()
+
+		return false
+	}
+
 	inject := func(tok *yellowfinToken) {
 		// During initial deployment of this feature, people will still have yellowfin cookies such as JSESSIONID
 		// lingering in their browser. We need to make sure that we're clobbering those here. So what we're doing here
@@ -167,9 +203,16 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		done := false
 		target.lock.RLock()
 		token_yf, exists := target.tokenMap[authData.Identity].(*yellowfinToken)
-		if exists && token_yf.Expires.After(time.Now()) {
-			done = true
-			inject(token_yf)
+		yfLoginparams := yellowfinLoginParameters{}
+		if exists {
+			// If the YF session expires, we will have a saved copy of the
+			// login parameters ready for the next login.
+			yfLoginparams = token_yf.Parameters
+
+			if token_yf.Expires.After(time.Now()) {
+				done = true
+				inject(token_yf)
+			}
 		}
 		target.lock.RUnlock()
 		if done {
@@ -188,7 +231,7 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		target.lock.Unlock()
 
 		if haveUserLock {
-			token := authYellowfinLogin(log, w, req, authData)
+			token := authYellowfinLogin(log, w, req, authData, yfLoginparams)
 			if token != nil {
 				// Insert cached token
 				target.lock.Lock()
@@ -215,8 +258,14 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 	return false
 }
 
-func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *serviceauth.ImqsAuthResponse) *yellowfinToken {
-	authReq, err := ms_http.NewRequest("POST", serviceauth.Imqsauth_url+"/login_yellowfin", nil)
+func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *serviceauth.ImqsAuthResponse, parameters yellowfinLoginParameters) *yellowfinToken {
+	paramsBytes, err := json.Marshal(parameters)
+	if err != nil {
+		log.Errorf("Error logging in to yellowfin. Login parameters Invalid: %v", err)
+		http.Error(w, "Error loggin in to yellowfin", http.StatusInternalServerError)
+		return nil
+	}
+	authReq, err := ms_http.NewRequest("POST", serviceauth.Imqsauth_url+"/login_yellowfin", bytes.NewBuffer(paramsBytes))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil
