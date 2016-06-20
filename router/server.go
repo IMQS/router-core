@@ -86,7 +86,7 @@ func (s *Server) ListenAndServe() error {
 	httpPort := fmt.Sprintf(":%v", s.configHttp.GetPort())
 	httpPortSecondary := ""
 	if s.configHttp.SecondaryPort != 0 {
-		fmt.Sprintf(":%v", s.configHttp.SecondaryPort)
+		httpPortSecondary = fmt.Sprintf(":%v", s.configHttp.SecondaryPort)
 	}
 	sslPort := ""
 	if s.configHttp.EnableHTTPS {
