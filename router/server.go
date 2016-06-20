@@ -91,6 +91,9 @@ func (s *Server) ListenAndServe() error {
 	sslPort := ""
 	if s.configHttp.EnableHTTPS {
 		sslPort = ":https"
+		if s.configHttp.HTTPSPort != 0 {
+			sslPort = fmt.Sprintf(":%v", s.configHttp.HTTPSPort)
+		}
 	}
 
 	listenAndRunHTTP := func(listener *net.Listener, port string, done chan error) {
@@ -110,11 +113,11 @@ func (s *Server) ListenAndServe() error {
 		done <- err
 	}
 
-	listenAndRunSSL := func(listener *net.Listener, done chan error) {
+	listenAndRunSSL := func(listener *net.Listener, port string, done chan error) {
 		var err error
 		for {
 			var ln net.Listener
-			if ln, err = s.createSSLListener(); err != nil {
+			if ln, err = s.createSSLListener(port); err != nil {
 				s.errorLog.Errorf("createSSLListener error: %s\n", err.Error())
 				break
 			}
@@ -136,7 +139,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	if sslPort != "" {
 		doneSSL = make(chan error)
-		go listenAndRunSSL(&s.listenerSSL, doneSSL)
+		go listenAndRunSSL(&s.listenerSSL, sslPort, doneSSL)
 	}
 
 	// Wait for all potential listeners to finish
@@ -181,7 +184,7 @@ func (s *Server) autoRestartAfterError(err error) bool {
 	return false
 }
 
-func (s *Server) createSSLListener() (net.Listener, error) {
+func (s *Server) createSSLListener(port string) (net.Listener, error) {
 	// This function was modelled on the code inside the standard library's ListenAndServeTLS()
 
 	config := &tls.Config{}
@@ -200,7 +203,7 @@ func (s *Server) createSSLListener() (net.Listener, error) {
 		return nil, err
 	}
 
-	ln, err := net.Listen("tcp", ":https")
+	ln, err := net.Listen("tcp", port)
 	if err != nil {
 		return nil, err
 	}

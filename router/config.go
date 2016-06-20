@@ -20,7 +20,8 @@ Example configuration file:
 	"HTTP": {
 		"Port": 80,												Primary HTTP port
 		"SecondaryPort": 8080,									One can optionally listen for HTTP on two ports
-		"EnableHTTPS": true,									Enable HTTPS on port 443
+		"EnableHTTPS": true,									Enable HTTPS
+		"HTTPSPort": 444,										Override default HTTPS port (443)
 		"CertKeyFile": "c:/imqsbin/conf/ssl.key"				SSL private key
 		"CertFile": "c:/imqsbin/conf/ssl.crt"					SSL certificate file. Concatenation of your certificate with the CA certificate chain.
 		"DisableKeepAlive": true,								Controls http.Transport.DisableKeepAlive. Default = false
@@ -91,6 +92,7 @@ type Config struct {
 type ConfigHTTP struct {
 	Port                  uint16
 	SecondaryPort         uint16
+	HTTPSPort             uint16
 	EnableHTTPS           bool
 	CertFile              string
 	CertKeyFile           string
@@ -225,6 +227,9 @@ func (c *Config) Overlay(other *Config) {
 	}
 	if other.HTTP.SecondaryPort != 0 {
 		c.HTTP.SecondaryPort = other.HTTP.SecondaryPort
+	}
+	if other.HTTP.HTTPSPort != 0 {
+		c.HTTP.HTTPSPort = other.HTTP.HTTPSPort
 	}
 	if other.HTTP.EnableHTTPS {
 		c.HTTP.EnableHTTPS = other.HTTP.EnableHTTPS
