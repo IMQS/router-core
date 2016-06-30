@@ -343,7 +343,6 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 				var err error
 				err = websocket.Message.Receive(fromSocket, &data)
 				if err == io.EOF {
-					s.errorLog.Errorf("Closing connection. EOF")
 					fromSocket.Close()
 					toSocket.Close()
 					break
