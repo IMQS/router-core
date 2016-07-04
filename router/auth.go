@@ -137,6 +137,29 @@ func pureHubGetToken(log *log.Logger, target *targetPassThroughAuth) error {
 	return err
 }
 
+func injectYellowfinCookies(req *http.Request, tok *yellowfinToken) {
+	// During initial deployment of this feature, people will still have yellowfin cookies such as JSESSIONID
+	// lingering in their browser. We need to make sure that we're clobbering those here. So what we're doing here
+	// is discarding the cookies that the user sent from his browser.
+	orgCookies := req.Cookies()
+	req.Header.Del("Cookie")
+	// Add back all other cookies
+	for _, c := range orgCookies {
+		if c.Name != "JSESSIONID" && c.Name != "IPID" {
+			req.AddCookie(c)
+		}
+	}
+	// Inject our yellowfin cookies
+	req.AddCookie(&http.Cookie{
+		Name:  "JSESSIONID",
+		Value: tok.JSESSIONID,
+	})
+	req.AddCookie(&http.Cookie{
+		Name:  "IPID",
+		Value: tok.IPID,
+	})
+}
+
 func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *serviceauth.ImqsAuthResponse, target *targetPassThroughAuth) bool {
 	if authData == nil {
 		log.Errorf("For Yellowfin transparent authentication, you must also enforce authorization")
@@ -144,8 +167,9 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		return false
 	}
 
+	switch req.URL.Path {
 	// Used to configure extra parameters present in YF logins
-	if req.URL.Path == "/yellowfin/loginparameters" {
+	case "/yellowfin/loginparameters":
 		errorResponse := func(err error) {
 			log.Errorf("Error parsing yf login paramters: %v", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -163,36 +187,52 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 			return false
 		}
 
-		// Invalidate user token by expiring session.
+		// Invalidate user token by expiring the current session.
 		// We also preset a new future session with the given YF parameters.
 		target.lock.Lock()
 		target.tokenMap[authData.Identity] = &yellowfinToken{Expires: time.Now().Add(-1 * time.Second), Parameters: params}
 		target.lock.Unlock()
 
-		return false
-	}
+		return false // do not forward this to YF
 
-	inject := func(tok *yellowfinToken) {
-		// During initial deployment of this feature, people will still have yellowfin cookies such as JSESSIONID
-		// lingering in their browser. We need to make sure that we're clobbering those here. So what we're doing here
-		// is discarding the cookies that the user sent from his browser.
-		orgCookies := req.Cookies()
-		req.Header.Del("Cookie")
-		// Add back all other cookies
-		for _, c := range orgCookies {
-			if c.Name != "JSESSIONID" && c.Name != "IPID" {
-				req.AddCookie(c)
+	// This is actually the normal IMQS8 logout call routed to here.
+	// This is necessary to so that we can inject any YF session cookies we might have,
+	// before forwarding the logout call to the Auth system.
+	// This is required to gracefully logout YF with IMQS.
+	case "/yellowfin/logout":
+		logoutReq, err := http.NewRequest("POST", serviceauth.Imqsauth_url+"/logout", nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return false
+		}
+
+		// Copy the IMQS8 session cookie to the new logout call
+		for _, c := range req.Cookies() {
+			if c.Name == "session" {
+				logoutReq.AddCookie(c)
+				break
 			}
 		}
-		// Inject our yellowfin cookies
-		req.AddCookie(&http.Cookie{
-			Name:  "JSESSIONID",
-			Value: tok.JSESSIONID,
-		})
-		req.AddCookie(&http.Cookie{
-			Name:  "IPID",
-			Value: tok.IPID,
-		})
+
+		target.lock.Lock()
+		token_yf, exists := target.tokenMap[authData.Identity].(*yellowfinToken)
+		if exists {
+			// Add the stored YF session to the logout then delete the session on router
+			injectYellowfinCookies(logoutReq, token_yf)
+			delete(target.tokenMap, authData.Identity)
+		}
+		target.lock.Unlock()
+
+		logoutResp, err := http.DefaultClient.Do(logoutReq)
+		if err != nil {
+			log.Errorf("Error logging out of IMQS", err)
+			http.Error(w, err.Error(), http.StatusGatewayTimeout)
+			return false
+		}
+		defer logoutResp.Body.Close()
+
+		return false // do not forward this to YF
+	default:
 	}
 
 	// The acquisition of a new cookie is the somewhat nontrivial case,
@@ -211,7 +251,7 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 
 			if token_yf.Expires.After(time.Now()) {
 				done = true
-				inject(token_yf)
+				injectYellowfinCookies(req, token_yf)
 			}
 		}
 		target.lock.RUnlock()
