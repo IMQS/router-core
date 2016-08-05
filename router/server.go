@@ -15,6 +15,7 @@ import (
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
 	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
+	"github.com/IMQS/httpbridge/go/src/httpbridge"
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,16 +33,20 @@ import (
 // Router Server
 type Server struct {
 	HttpServer        *http.Server
-	httpTransport     *ms_http.Transport
+	HttpsServer       *http.Server
+	httpTransport     *http.Transport
+	httpTransport_MS  *ms_http.Transport
 	configHttp        ConfigHTTP
 	debugRoutes       bool
-	router            Router
+	useMSHTTP         bool // Necessary prior to Go 1.7, to talk to IIS/Azure (we needed this for PureTech work)
+	translator        urlTranslator
 	errorLog          *log.Logger
 	listener          net.Listener
 	listenerSecondary net.Listener
 	listenerSSL       net.Listener
 	waiter            sync.WaitGroup
-	wsdlMatch         *regexp.Regexp // hack for serving static content
+	wsdlMatch         *regexp.Regexp             // hack for serving static content
+	httpBridgeServers map[int]*httpbridge.Server // Keys of the map are httpbridge backend port numbers
 }
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
@@ -49,28 +55,53 @@ func NewServer(config *Config) (*Server, error) {
 	s := &Server{}
 	s.configHttp = config.HTTP
 	s.HttpServer = &http.Server{}
+	s.HttpsServer = &http.Server{}
+	s.httpBridgeServers = map[int]*httpbridge.Server{}
 
-	// Using newer apachelog
+	// Using newer apachelog (see comments in package includes list)
 	//s.HttpServer.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, openLog(config.AccessLog, os.Stdout))
 
 	// Using older apachelog
 	s.HttpServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
+	s.HttpsServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
 
 	s.debugRoutes = config.DebugRoutes
 	s.errorLog = log.New(pickLogfile(config.ErrorLog))
 
-	if s.router, err = NewRouter(config); err != nil {
+	s.useMSHTTP = false
+
+	if s.translator, err = newUrlTranslator(config); err != nil {
 		return nil, err
 	}
 
-	s.httpTransport = &ms_http.Transport{
-		DisableKeepAlives:     config.HTTP.DisableKeepAlive,
-		MaxIdleConnsPerHost:   config.HTTP.MaxIdleConnections,
-		DisableCompression:    true,
-		ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
-	}
-	s.httpTransport.Proxy = func(req *ms_http.Request) (*url.URL, error) {
-		return s.router.GetProxy(s.errorLog, req)
+	if s.useMSHTTP {
+		s.httpTransport_MS = &ms_http.Transport{
+			DisableKeepAlives:     config.HTTP.DisableKeepAlive,
+			MaxIdleConnsPerHost:   config.HTTP.MaxIdleConnections,
+			DisableCompression:    true,
+			ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
+		}
+		s.httpTransport_MS.Proxy = func(req *ms_http.Request) (*url.URL, error) {
+			return s.translator.getProxy(s.errorLog, req.URL.Host)
+		}
+	} else {
+		s.httpTransport = &http.Transport{
+			// ------------------------------------- start of copy from Go src (with Proxy removed)
+			Dial: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).Dial,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			// ------------------------------------- end of copy from Go src
+			DisableKeepAlives:     config.HTTP.DisableKeepAlive,
+			MaxIdleConnsPerHost:   config.HTTP.MaxIdleConnections,
+			DisableCompression:    true,
+			ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
+		}
+		s.httpTransport.Proxy = func(req *http.Request) (*url.URL, error) {
+			return s.translator.getProxy(s.errorLog, req.URL.Host)
+		}
 	}
 
 	s.errorLog.Info("Starting v0.03 with:")
@@ -99,13 +130,17 @@ func (s *Server) ListenAndServe() error {
 	listenAndRunHTTP := func(listener *net.Listener, port string, done chan error) {
 		var err error
 		for {
-			var ln net.Listener
-			if ln, err = net.Listen("tcp", port); err != nil {
-				s.errorLog.Errorf("net.Listen (port %v) error: %s\n", port, err.Error())
-				break
-			}
-			*listener = tcpKeepAliveListener{ln.(*net.TCPListener)}
-			err = s.HttpServer.Serve(*listener)
+			s.HttpServer.Addr = port
+			s.HttpServer.ListenAndServe()
+			/*
+				var ln net.Listener
+				if ln, err = net.Listen("tcp", port); err != nil {
+					s.errorLog.Errorf("net.Listen (port %v) error: %s\n", port, err.Error())
+					break
+				}
+				*listener = tcpKeepAliveListener{ln.(*net.TCPListener)}
+				err = s.HttpServer.Serve(*listener)
+			*/
 			if !s.autoRestartAfterError(err) {
 				break
 			}
@@ -116,13 +151,17 @@ func (s *Server) ListenAndServe() error {
 	listenAndRunSSL := func(listener *net.Listener, port string, done chan error) {
 		var err error
 		for {
-			var ln net.Listener
-			if ln, err = s.createSSLListener(port); err != nil {
-				s.errorLog.Errorf("createSSLListener error: %s\n", err.Error())
-				break
-			}
-			*listener = ln
-			err = s.HttpServer.Serve(*listener)
+			s.HttpsServer.Addr = port
+			s.HttpsServer.ListenAndServeTLS(s.configHttp.CertFile, s.configHttp.CertKeyFile)
+			/*
+				var ln net.Listener
+				if ln, err = s.createSSLListener(port); err != nil {
+					s.errorLog.Errorf("createSSLListener error: %s\n", err.Error())
+					break
+				}
+				*listener = ln
+				err = s.HttpServer.Serve(*listener)
+			*/
 			if !s.autoRestartAfterError(err) {
 				break
 			}
@@ -130,7 +169,13 @@ func (s *Server) ListenAndServe() error {
 		done <- err
 	}
 
-	var donePrimary, doneSecondary, doneSSL chan error
+	// PROBLEM: if one of these listeners errors out, then we won't know it until all other listeners
+	// have finished too. We need a different model here, like a polling loop, instead of sequential code.
+	listenAndRunHttpBridge := func(done chan error) {
+		done <- s.runHttpBridgeServers()
+	}
+
+	var donePrimary, doneSecondary, doneSSL, doneHttpBridge chan error
 	donePrimary = make(chan error)
 	go listenAndRunHTTP(&s.listener, httpPort, donePrimary)
 	if httpPortSecondary != "" {
@@ -141,6 +186,8 @@ func (s *Server) ListenAndServe() error {
 		doneSSL = make(chan error)
 		go listenAndRunSSL(&s.listenerSSL, sslPort, doneSSL)
 	}
+	doneHttpBridge = make(chan error)
+	go listenAndRunHttpBridge(doneHttpBridge)
 
 	// Wait for all potential listeners to finish
 	err := []error{}
@@ -152,6 +199,9 @@ func (s *Server) ListenAndServe() error {
 	}
 	if doneSSL != nil {
 		err = append(err, <-doneSSL)
+	}
+	if doneHttpBridge != nil {
+		err = append(err, <-doneHttpBridge)
 	}
 	if len(err) == 0 {
 		return errors.New("Server not configured to listen on any ports")
@@ -186,6 +236,12 @@ func (s *Server) autoRestartAfterError(err error) bool {
 
 func (s *Server) createSSLListener(port string) (net.Listener, error) {
 	// This function was modelled on the code inside the standard library's ListenAndServeTLS()
+
+	// Setup HTTP/2 before srv.Serve, to initialize srv.TLSConfig
+	// before we clone it and create the TLS Listener.
+	//if err := tls.setupHTTP2(); err != nil {
+	//	return err
+	//}
 
 	config := &tls.Config{}
 	if config.NextProtos == nil {
@@ -243,7 +299,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "", http.StatusTeapot)
 		return
 	}
-	newurl, requirePermission, passThroughAuth := s.router.ProcessRoute(req.URL)
+	newurl, requirePermission, passThroughAuth := s.translator.processRoute(req.URL)
 
 	if s.debugRoutes {
 		s.errorLog.Infof("(%v) -> (%v)", req.RequestURI, newurl)
@@ -264,15 +320,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	switch parse_scheme(newurl) {
-	case "http":
+	case scheme_http:
+		fallthrough
+	case scheme_https:
 		s.forwardHttp(w, req, newurl)
-	case "ws":
+	case scheme_httpbridge:
+		s.forwardHttpBridge(w, req, newurl)
+	case scheme_ws:
 		s.forwardWebsocket(w, req, newurl)
+	default:
+		s.errorLog.Errorf("Unrecognized scheme (%v) -> (%v)", req.RequestURI, newurl)
+		http.Error(w, "Unrecognized forwarding URL", http.StatusInternalServerError)
 	}
 }
 
 /*
-forwardHTTP connects to all http scheme backends and copies bidirectionaly between the incomming
+forwardHTTP connects to all http scheme backends and copies bidirectionaly between the incoming
 connections and the backend connections. It also copies required HTTP headers between the connections making the
 router "middle man" invisible to incomming connections.
 The body part of both requests and responses are implemented as Readers, thus allowing the body contents
@@ -291,25 +354,48 @@ the response was sent. This would then result in s.httpTransport.RoundTrip(clean
 an EOF error when it tried to re-use that TCP connection.
 */
 func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string) {
-	cleaned, err := ms_http.NewRequest(req.Method, newurl, req.Body)
+	var cleaned_ms *ms_http.Request
+	var cleaned *http.Request
+	var err error
+	if s.useMSHTTP {
+		cleaned_ms, err = ms_http.NewRequest(req.Method, newurl, req.Body)
+	} else {
+		cleaned, err = http.NewRequest(req.Method, newurl, req.Body)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 
 	srcHost := req.Host
-	dstHost := cleaned.Host
+	dstHost := ""
+	if s.useMSHTTP {
+		dstHost = cleaned_ms.Host
+		copyheadersIn_MS(srcHost, req.Header, dstHost, cleaned_ms.Header)
+	} else {
+		dstHost = cleaned.Host
+		copyheadersIn(srcHost, req.Header, dstHost, cleaned.Header)
+	}
 
-	copyheadersIn(srcHost, req.Header, dstHost, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
 
-	resp, err := s.httpTransport.RoundTrip(cleaned)
+	var resp *http.Response
+	var resp_ms *ms_http.Response
+	if s.useMSHTTP {
+		resp_ms, err = s.httpTransport_MS.RoundTrip(cleaned_ms)
+	} else {
+		resp, err = s.httpTransport.RoundTrip(cleaned)
+	}
 	if err != nil {
 		s.errorLog.Info("HTTP RoundTrip error: " + err.Error())
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	copyheadersOut(dstHost, resp.Header, srcHost, w.Header(), req.TLS != nil)
+	if s.useMSHTTP {
+		copyheadersOut_MS(dstHost, resp_ms.Header, srcHost, w.Header(), req.TLS != nil)
+	} else {
+		copyheadersOut(dstHost, resp.Header, srcHost, w.Header(), req.TLS != nil)
+	}
 	w.WriteHeader(resp.StatusCode)
 
 	if resp.Body != nil {
@@ -371,6 +457,13 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 	wsServer.ServeHTTP(w, req)
 }
 
+func (s *Server) forwardHttpBridge(w http.ResponseWriter, req *http.Request, newurl string) {
+	parsed, _ := url.Parse(newurl)
+	parts := strings.Split(parsed.Host, ":")
+	port, _ := strconv.Atoi(parts[1])
+	s.httpBridgeServers[port].ServeHTTP(w, req)
+}
+
 // Returns true if the request should continue to be passed through the router
 // We make a round-trip to imqsauth here to check the credentials of the incoming request.
 // This adds about a 0.5ms latency to the request. It might be worthwhile to embed
@@ -410,7 +503,53 @@ func (s *Server) Stop() {
 	if s.listenerSSL != nil {
 		s.listenerSSL.Close()
 	}
+	for _, v := range s.httpBridgeServers {
+		v.Stop()
+	}
 	s.waiter.Wait()
+}
+
+func (s *Server) runHttpBridgeServers() error {
+	done := make(chan error)
+	nwaiting := 0
+	for _, v := range s.translator.allRoutes() {
+		if v.scheme() != scheme_httpbridge {
+			continue
+		}
+		parsed, err := url.Parse(v.target.baseUrl)
+		if err != nil {
+			return fmt.Errorf(`Invalid URL "%v": %v`, v.target.baseUrl, err)
+		}
+		parts := strings.Split(parsed.Host, ":")
+		if len(parts) != 2 {
+			return fmt.Errorf(`Invalid port specification in httpbridge URL "%v"`, v.target.baseUrl)
+		}
+		port, _ := strconv.Atoi(parts[1])
+		if port < 1 || port > 65535 {
+			return fmt.Errorf(`Invalid port specification in httpbridge URL "%v"`, v.target.baseUrl)
+		}
+		if s.httpBridgeServers[port] != nil {
+			continue
+		}
+		hs := &httpbridge.Server{
+			DisableHttpListener: true,
+			BackendPort:         fmt.Sprintf(":%v", port),
+		}
+		s.httpBridgeServers[port] = hs
+		go func() {
+			nwaiting++
+			done <- hs.ListenAndServe()
+		}()
+	}
+	var firstErr error
+	for nwaiting != 0 {
+		err := <-done
+		nwaiting--
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -423,7 +562,7 @@ func copyCookieToMSHTTP(org *http.Cookie) *ms_http.Cookie {
 	return c
 }
 
-func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.Header) {
+func copyheadersIn(srcHost string, src http.Header, dstHost string, dst http.Header) {
 	for k, vv := range src {
 		for _, v := range vv {
 			if k == "Location" {
@@ -442,7 +581,43 @@ func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.
 	}
 }
 
-func copyheadersOut(srcHost string, src ms_http.Header, dstHost string, dst http.Header, isHTTPS bool) {
+func copyheadersIn_MS(srcHost string, src http.Header, dstHost string, dst ms_http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			if k == "Location" {
+				// Example
+				// Original  Location		http://example.com/files/abc
+				// Rewritten Location		http://127.0.0.1:2005/abc
+				// -- I'm not sure why we do this -- If in doubt, just delete this. It seems wrong.
+				v = strings.Replace(v, srcHost, dstHost, 1)
+			}
+			if k == "Connection" && v == "close" {
+				// See detailed explanation in top-level function comment
+				continue
+			}
+			dst.Add(k, v)
+		}
+	}
+}
+
+func copyheadersOut(srcHost string, src http.Header, dstHost string, dst http.Header, isHTTPS bool) {
+	for k, vv := range src {
+		for _, v := range vv {
+			if k == "Location" {
+				// Some servers will send a Location header, but that Location will be an internal network address, so we
+				// need to rewrite it to be an external address. It may be wiser to just stripe the absolute portion of Location away,
+				// just leaving a relative URL. This is all for Yellowfin's sake.
+				v = strings.Replace(v, srcHost, dstHost, 1)
+				if isHTTPS && strings.Index(v, "http:") == 0 {
+					v = strings.Replace(v, "http:", "https:", 1)
+				}
+			}
+			dst.Add(k, v)
+		}
+	}
+}
+
+func copyheadersOut_MS(srcHost string, src ms_http.Header, dstHost string, dst http.Header, isHTTPS bool) {
 	for k, vv := range src {
 		for _, v := range vv {
 			if k == "Location" {

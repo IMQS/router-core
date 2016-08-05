@@ -59,6 +59,7 @@ Example configuration file:
 		"/3rdparty/(.*)": "{THIRDPARTY}/$1",					Transparent authentication to PureHub
 		"/yellowfin/(.*)": "{YELLOWFIN}/$1",					Transparent authentication to Yellowfin
 		"/telemetry/(.*)": "ws://127.0.0.1:2001/$1",			Websocket target
+		"/crud/(.*)": "httpbridge://127.0.0.1:2013/$1",			HttpBridge
 		"/(.*)": "http://127.0.0.1/www/$1"						This will end up catching anything that doesn't match one of the more specific routes
 	},
 }
@@ -158,7 +159,7 @@ func (c *Config) verify() error {
 				}
 			}
 		} else if parse_scheme(replace) == scheme_unknown {
-			return fmt.Errorf("Unrecognized URL scheme (%v). Must be http:// https:// ws:// or {TARGET}", replace)
+			return fmt.Errorf("Unrecognized URL scheme (%v). Must be one of http://, https://, ws://, httpbridge://, {TARGET}", replace)
 		}
 	}
 	for name, target := range c.Targets {
@@ -166,7 +167,7 @@ func (c *Config) verify() error {
 			return fmt.Errorf("Target names must be upper case (%v)", name)
 		}
 		if parse_scheme(target.URL) == scheme_unknown {
-			return fmt.Errorf("Unrecognized URL scheme (%v). Must be http://, https:// or ws://", target.URL)
+			return fmt.Errorf("Unrecognized URL scheme (%v). Must be one of http://, https://, ws://, httpbridge://", target.URL)
 		}
 	}
 	if c.Proxy != "" {

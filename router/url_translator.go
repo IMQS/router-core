@@ -3,7 +3,6 @@ package router
 import (
 	"fmt"
 	"github.com/IMQS/log"
-	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -15,9 +14,11 @@ import (
 type scheme string
 
 const (
-	scheme_unknown scheme = ""
-	scheme_ws             = "ws"
-	scheme_http           = "http"
+	scheme_unknown    scheme = ""
+	scheme_ws                = "ws"
+	scheme_http              = "http"
+	scheme_https             = "https"
+	scheme_httpbridge        = "httpbridge"
 )
 
 // A target URL
@@ -58,10 +59,14 @@ type route struct {
 
 func parse_scheme(targetUrl string) scheme {
 	switch {
-	case strings.Index(targetUrl, "ws") == 0:
+	case targetUrl[0:3] == "ws:":
 		return scheme_ws
-	case strings.Index(targetUrl, "http") == 0:
+	case targetUrl[0:5] == "http:":
 		return scheme_http
+	case targetUrl[0:6] == "https:":
+		return scheme_https
+	case targetUrl[0:11] == "httpbridge:":
+		return scheme_httpbridge
 	}
 	return scheme_unknown
 }
@@ -70,7 +75,14 @@ func (r *route) scheme() scheme {
 	return parse_scheme(r.target.baseUrl)
 }
 
-// Router configuration when live
+// Router configuration when live.
+//
+// This implements the fast lookup from URL to target.
+// It also performs various sanity checks when initialized.
+//
+// This type is exposed internally via the urlTranslator interface.
+// Although this is the only implementation of that interface, by doing it this way,
+// we are encapsulating the functionality of the routeSet from the rest of the program.
 type routeSet struct {
 	routes []*route
 
@@ -91,13 +103,14 @@ func newTarget() *target {
 	return t
 }
 
-// The Router interface is responsible for taking an incoming request and rewriting it
-// for an appropriate backend.
-type Router interface {
+// A urlTranslator is responsible for taking an incoming request and rewriting it for an appropriate backend.
+type urlTranslator interface {
 	// Rewrite an incoming request. If newurl is a blank string, then the URL does not match any route.
-	ProcessRoute(uri *url.URL) (newurl string, requirePermission string, passThroughAuth *targetPassThroughAuth)
+	processRoute(uri *url.URL) (newurl string, requirePermission string, passThroughAuth *targetPassThroughAuth)
 	// Return the URL of a proxy to use for a given request
-	GetProxy(errLog *log.Logger, req *ms_http.Request) (*url.URL, error)
+	getProxy(errLog *log.Logger, host string) (*url.URL, error)
+	// Returns all routes
+	allRoutes() []*route
 }
 
 func (r *routeSet) computeCaches() error {
@@ -141,7 +154,7 @@ func (r *routeSet) computeCaches() error {
 	return nil
 }
 
-func (r *routeSet) ProcessRoute(uri *url.URL) (newurl string, requirePermission string, passThroughAuth *targetPassThroughAuth) {
+func (r *routeSet) processRoute(uri *url.URL) (newurl string, requirePermission string, passThroughAuth *targetPassThroughAuth) {
 	route := r.match(uri)
 	if route == nil {
 		return "", "", nil
@@ -152,15 +165,19 @@ func (r *routeSet) ProcessRoute(uri *url.URL) (newurl string, requirePermission 
 	return rewritten, route.target.requirePermission, &route.target.auth
 }
 
-func (r *routeSet) GetProxy(errLog *log.Logger, req *ms_http.Request) (*url.URL, error) {
-	if r.targetHash[req.URL.Host] == nil {
-		errLog.Errorf("Nil target pointer found in hash for host %v", req.URL.Host)
+func (r *routeSet) getProxy(errLog *log.Logger, host string) (*url.URL, error) {
+	if r.targetHash[host] == nil {
+		errLog.Errorf("Nil target pointer found in hash for host %v", host)
 		return nil, nil
 	}
-	if !r.targetHash[req.URL.Host].useProxy {
+	if !r.targetHash[host].useProxy {
 		return nil, nil
 	}
 	return r.proxy, nil
+}
+
+func (r *routeSet) allRoutes() []*route {
+	return r.routes
 }
 
 func (r *routeSet) match(uri *url.URL) *route {
@@ -179,8 +196,24 @@ func (r *routeSet) match(uri *url.URL) *route {
 	return nil
 }
 
-// Turn a configuration into a runnable Router
-func NewRouter(config *Config) (Router, error) {
+// Ensure that httpbridge targets specify the httpbridge backend port number.
+func (r *routeSet) verifyHttpBridgeURLs() error {
+	for _, route := range r.routes {
+		if route.scheme() == scheme_httpbridge {
+			parsedURL, err := url.Parse(route.target.baseUrl)
+			if err != nil {
+				return fmt.Errorf(`Invalid replacement URL "%v": %v`, route.target.baseUrl, err)
+			}
+			if strings.Index(parsedURL.Host, ":") == -1 {
+				return fmt.Errorf(`httpbridge target must specify a port number. "%v" does not.`, route.target.baseUrl)
+			}
+		}
+	}
+	return nil
+}
+
+// Turn a configuration into a runnable urlTranslator
+func newUrlTranslator(config *Config) (urlTranslator, error) {
 	rs := &routeSet{}
 
 	err := config.verify()
@@ -223,6 +256,10 @@ func NewRouter(config *Config) (Router, error) {
 			route.replace = parsedUrl.Path
 		}
 		rs.routes = append(rs.routes, route)
+	}
+
+	if err = rs.verifyHttpBridgeURLs(); err != nil {
+		return nil, err
 	}
 
 	if err = rs.computeCaches(); err != nil {
