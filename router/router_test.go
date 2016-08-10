@@ -20,20 +20,28 @@ Websocket:
 Same as above but since there are no headers or methods in websockets the message received by the
 backend are return to via the router to the client websocket.
 
-An external request is also made and returned to the client which means that the test TestHostReplace
-requires a working internet connection to pass.
+Killing A Server
+
+At the time of going to press, there is no way to kill a Go HTTP server, if you've started it with
+ListenAndServe or ListenAndServeTLS. You may be tempted to implement your own version of those two
+functions, and that's OK for the HTTP case, but for the HTTPS case, if you do implement your own,
+you lose HTTP/2 functionality. Initially we followed this approach, but when HTTP/2 came around,
+we needed to abandon it.
+
+Long story short - we cannot kill our HTTP server inside the unit test framework, but we don't actually
+need to, because the Go test framework launches a separate process for each test.
 */
 
 import (
+	"flag"
 	"fmt"
 	"golang.org/x/net/websocket"
 	"html"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
+	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -42,6 +50,9 @@ const mainConfig = `
 {
 	"AccessLog":		"router-access-test.log",
 	"ErrorLog":			"router-error-test.log",
+	"HTTP": {
+		"Port": 5002
+	},
 	"Targets": {
 		"PORT5000": {
 			"URL": "http://127.0.0.1:5000"
@@ -59,73 +70,28 @@ const mainConfig = `
 }
 `
 
-// We still need to figure out a way to kill the server gracefully.
-// Right now, since we don't know how, we have to simply start the server
-// on the first test, and keep it running for the duration of all tests.
-const useSingleSandbox = true
-
 type sandbox struct {
-	front       *Server
-	back        *backend
-	frontWaiter chan error
-	backWaiter  chan error
+	front *Server
+	back  *backend
 }
 
-var singleSandbox *sandbox = nil
-
-func (s *sandbox) start(t *testing.T) {
-	if t != nil {
-		//t.Log("Starting sandbox")
-	}
-	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 0
+func (s *sandbox) start() error {
 	s.back = newBackend()
 	s.back.httpServer.Addr = ":5000"
-	s.backWaiter = goLaunchWaiter(s.back.listenAndServe)
+	go s.back.httpServer.ListenAndServe()
+
 	config := &Config{}
 	err := config.LoadString(mainConfig)
 	if err != nil {
-		t.Error(err)
+		return err
 	}
 	if s.front, err = NewServer(config); err != nil {
-		t.Fatal(err)
+		return err
 	}
 
-	launch := func() error {
-		return s.front.ListenAndServe(":5002", "")
-	}
+	go s.front.ListenAndServe()
 
-	s.frontWaiter = goLaunchWaiter(launch)
-	if t != nil {
-		t.Log("Sandbox started")
-	}
-}
-
-func (s *sandbox) stop(t *testing.T) {
-	if useSingleSandbox && s == singleSandbox {
-		// do nothing
-	} else {
-		//t.Log("Stopping sandbox")
-		s.back.stop()
-		s.front.Stop()
-		t.Logf("backWaiter.stop: %v", <-s.backWaiter)
-		t.Logf("frontWaiter.stop: %v", <-s.frontWaiter)
-		//time.Sleep(time.Millisecond * 1000)
-		//t.Log("Sandbox stopped")
-	}
-}
-
-func startSandbox(t *testing.T) *sandbox {
-	if useSingleSandbox {
-		if singleSandbox == nil {
-			singleSandbox = &sandbox{}
-			singleSandbox.start(t)
-		}
-		return singleSandbox
-	} else {
-		s := &sandbox{}
-		s.start(t)
-		return s
-	}
+	return nil
 }
 
 func doHttp(t *testing.T, method, url, body, expect_body string) {
@@ -137,12 +103,11 @@ func doHttp(t *testing.T, method, url, body, expect_body string) {
 }
 
 func doHttpFunc(t *testing.T, method, url, body string, verifyBodyFunc func(*testing.T, string)) {
-	client := &http.Client{}
 	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +120,6 @@ func doHttpFunc(t *testing.T, method, url, body string, verifyBodyFunc func(*tes
 }
 
 func TestVariousURL(t *testing.T) {
-	sb := startSandbox(t)
-
 	doHttp(t, "GET", "http://127.0.0.1:5002/gert/jan/piet", "", "Route not found\n")                                                       // Invalid route
 	doHttp(t, "GET", "http://127.0.0.1:5002/test1", "", "Method GET URL /test1 BODY ")                                                     // hello world
 	doHttp(t, "GET", "http://127.0.0.1:5002/test2/path1/path2", "", "Method GET URL /redirect2/path1/path2 BODY ")                         // replace base url
@@ -170,12 +133,9 @@ func TestVariousURL(t *testing.T) {
 			t.Errorf("nominatim search failed. Response body: %v", resp_body)
 		}
 	})
-
-	sb.stop(t)
 }
 
 func TestMethods(t *testing.T) {
-	sb := startSandbox(t)
 	methods := [4]string{"GET", "DELETE", "POST", "PUT"}
 	expected := [4]string{
 		"Method GET URL /test1/testbody BODY SomeBodyText",
@@ -185,7 +145,6 @@ func TestMethods(t *testing.T) {
 	for index, method := range methods {
 		doHttp(t, method, "http://127.0.0.1:5002/test1/testbody", "SomeBodyText", expected[index])
 	}
-	sb.stop(t)
 }
 
 /*
@@ -256,9 +215,8 @@ func TestSingleClientManyRequests(t *testing.T) {
 }
 */
 func TestWebsocket(t *testing.T) {
-	sb := startSandbox(t)
 	expected := "Backend Websocket Received : testing webserver"
-	go wsserver(t)
+	go wsServer(t)
 	time.Sleep(0.5 * 1e9) // Time for server to start
 	origin := "http://localhost/"
 	url := "ws://127.0.0.1:5002/wws/x"
@@ -291,24 +249,24 @@ func TestWebsocket(t *testing.T) {
 		t.Errorf("Expected \"%s\" received \"%s\"", expected, msg)
 	}
 	ws.Close()
-	sb.stop(t)
 }
 
-func TestFinish(t *testing.T) {
-	if useSingleSandbox {
-		// trick singleSandbox into dying, by making it think it is not the one-and-only
-		single := singleSandbox
-		singleSandbox = nil
-		single.stop(t)
+func TestMain(m *testing.M) {
+	flag.Parse()
+	singleSandbox := &sandbox{}
+	if err := singleSandbox.start(); err != nil {
+		panic(err)
 	}
+	os.Exit(m.Run())
 }
 
-// Very simple backend server to use for testing the url is returned in the body for checking against
-// the client expected return.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Very simple backend server to use for testing.
 type backend struct {
 	httpServer *http.Server
-	listener   net.Listener
-	waiter     sync.WaitGroup
 }
 
 func newBackend() *backend {
@@ -318,43 +276,18 @@ func newBackend() *backend {
 	return b
 }
 
-func (b *backend) listenAndServe() error {
-	addr := b.httpServer.Addr
-	var err error
-	if b.listener, err = net.Listen("tcp", addr); err != nil {
-		return err
-	}
-	return b.httpServer.Serve(b.listener)
-}
-
 func (b *backend) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	b.waiter.Add(1)
-	defer b.waiter.Done()
 	body, _ := ioutil.ReadAll(req.Body)
 	req.Body.Close()
 
 	fmt.Fprintf(w, "Method %s URL %s BODY %s", req.Method, html.EscapeString(req.URL.Path), body)
 }
 
-func (b *backend) stop() {
-	if b.listener != nil {
-		b.listener.Close()
-	}
-	b.waiter.Wait()
-}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Take as input a long running function that returns an error
-// Return a channel that will wait on a new goroutine for that long running function to return
-// When that function returns, its value is sent to the channel
-func goLaunchWaiter(exec func() error) chan error {
-	rchan := make(chan error)
-	go func() {
-		rchan <- exec()
-	}()
-	return rchan
-}
-
-func echoHandler(ws *websocket.Conn) {
+func wsEchoHandler(ws *websocket.Conn) {
 	log.Println("In Echo")
 	for {
 		var msg string
@@ -372,8 +305,8 @@ func echoHandler(ws *websocket.Conn) {
 }
 
 // simple websocket backend
-func wsserver(t *testing.T) {
-	http.Handle("/wws/", websocket.Handler(echoHandler))
+func wsServer(t *testing.T) {
+	http.Handle("/wws/", websocket.Handler(wsEchoHandler))
 	err := http.ListenAndServe(":5100", nil)
 	if err != nil {
 		t.Errorf("ListenAndServer : %s", err.Error())

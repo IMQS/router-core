@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
 )
 
@@ -13,18 +14,19 @@ func routeSetFromConfig(t *testing.T, cfg_json string) *routeSet {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router, err := NewRouter(cfg)
+	translator, err := newUrlTranslator(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return router.(*routeSet)
+	return translator.(*routeSet)
 }
 
 func verifyRoute(t *testing.T, rs *routeSet, inUrl string, expectOutUrl string) {
 	req := http.Request{}
 	req.RequestURI = inUrl
-	newUrl, _, good := rs.ProcessRoute(&req)
-	if newUrl != expectOutUrl || ((expectOutUrl != "") != good) {
+	uri, _ := url.Parse(inUrl)
+	newUrl, _, _ := rs.processRoute(uri)
+	if newUrl != expectOutUrl {
 		t.Errorf("route match failed: %v -> %v (expected %v)", inUrl, newUrl, expectOutUrl)
 	}
 }
