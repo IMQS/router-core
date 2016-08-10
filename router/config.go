@@ -16,6 +16,7 @@ Example configuration file:
 	"Proxy": "http://192.168.1.1:1234",							This is used to route any targets that specify UseProxy: true
 	"AccessLog": "c:/imqsvar/logs/router-access.log",			The access log file. If empty, defaults to 'stdout'.
 	"ErrorLog": "c:/imqsvar/logs/router-error.log",				The error log file. If empty, defaults to 'stderr'.
+	"LogLevel": "info",											The log level of the error log. Defaults to "info". Valid values are "trace", "debug", "info", "warn", "error"
 	"DebugRoutes": true,										Log every match attempt to the error log.
 	"HTTP": {
 		"Port": 80,												Primary HTTP port
@@ -59,6 +60,7 @@ Example configuration file:
 		"/3rdparty/(.*)": "{THIRDPARTY}/$1",					Transparent authentication to PureHub
 		"/yellowfin/(.*)": "{YELLOWFIN}/$1",					Transparent authentication to Yellowfin
 		"/telemetry/(.*)": "ws://127.0.0.1:2001/$1",			Websocket target
+		"/crud/(.*)": "httpbridge://2013/$1",					HttpBridge on port 2013. Note that no host is specified - only the port (2013 in this example).
 		"/(.*)": "http://127.0.0.1/www/$1"						This will end up catching anything that doesn't match one of the more specific routes
 	},
 }
@@ -83,6 +85,7 @@ type Config struct {
 	Proxy       string
 	AccessLog   string
 	ErrorLog    string
+	LogLevel    string
 	DebugRoutes bool
 	HTTP        ConfigHTTP
 	Targets     map[string]ConfigTarget
@@ -158,7 +161,7 @@ func (c *Config) verify() error {
 				}
 			}
 		} else if parse_scheme(replace) == scheme_unknown {
-			return fmt.Errorf("Unrecognized URL scheme (%v). Must be http:// https:// ws:// or {TARGET}", replace)
+			return fmt.Errorf("Unrecognized URL scheme (%v). Must be one of http://, https://, ws://, httpbridge://, {TARGET}", replace)
 		}
 	}
 	for name, target := range c.Targets {
@@ -166,7 +169,7 @@ func (c *Config) verify() error {
 			return fmt.Errorf("Target names must be upper case (%v)", name)
 		}
 		if parse_scheme(target.URL) == scheme_unknown {
-			return fmt.Errorf("Unrecognized URL scheme (%v). Must be http://, https:// or ws://", target.URL)
+			return fmt.Errorf("Unrecognized URL scheme (%v). Must be one of http://, https://, ws://, httpbridge://", target.URL)
 		}
 	}
 	if c.Proxy != "" {
@@ -215,6 +218,9 @@ func (c *Config) Overlay(other *Config) {
 	}
 	if other.ErrorLog != "" {
 		c.ErrorLog = other.ErrorLog
+	}
+	if other.LogLevel != "" {
+		c.LogLevel = other.LogLevel
 	}
 
 	if other.DebugRoutes {

@@ -15,6 +15,7 @@ import (
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
 	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
+	"github.com/IMQS/httpbridge/go/src/httpbridge"
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,13 +36,14 @@ type Server struct {
 	httpTransport     *ms_http.Transport
 	configHttp        ConfigHTTP
 	debugRoutes       bool
-	router            Router
+	translator        urlTranslator
 	errorLog          *log.Logger
 	listener          net.Listener
 	listenerSecondary net.Listener
 	listenerSSL       net.Listener
 	waiter            sync.WaitGroup
-	wsdlMatch         *regexp.Regexp // hack for serving static content
+	wsdlMatch         *regexp.Regexp             // hack for serving static content
+	httpBridgeServers map[int]*httpbridge.Server // Keys of the map are httpbridge backend port numbers
 }
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
@@ -49,8 +52,9 @@ func NewServer(config *Config) (*Server, error) {
 	s := &Server{}
 	s.configHttp = config.HTTP
 	s.HttpServer = &http.Server{}
+	s.httpBridgeServers = map[int]*httpbridge.Server{}
 
-	// Using newer apachelog
+	// Using newer apachelog (see comments in package includes list)
 	//s.HttpServer.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, openLog(config.AccessLog, os.Stdout))
 
 	// Using older apachelog
@@ -58,8 +62,15 @@ func NewServer(config *Config) (*Server, error) {
 
 	s.debugRoutes = config.DebugRoutes
 	s.errorLog = log.New(pickLogfile(config.ErrorLog))
+	if config.LogLevel != "" {
+		if lev, err := log.ParseLevel(config.LogLevel); err != nil {
+			s.errorLog.Errorf("%v", err)
+		} else {
+			s.errorLog.Level = lev
+		}
+	}
 
-	if s.router, err = NewRouter(config); err != nil {
+	if s.translator, err = newUrlTranslator(config); err != nil {
 		return nil, err
 	}
 
@@ -70,13 +81,13 @@ func NewServer(config *Config) (*Server, error) {
 		ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
 	}
 	s.httpTransport.Proxy = func(req *ms_http.Request) (*url.URL, error) {
-		return s.router.GetProxy(s.errorLog, req)
+		return s.translator.getProxy(s.errorLog, req.URL.Host)
 	}
 
-	s.errorLog.Info("Starting v0.03 with:")
-	s.errorLog.Infof("DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
-	s.errorLog.Infof("MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
-	s.errorLog.Infof("ResponseHeaderTimeout: %v", config.HTTP.ResponseHeaderTimeout)
+	s.errorLog.Info("Router starting with:")
+	s.errorLog.Infof(" DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
+	s.errorLog.Infof(" MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
+	s.errorLog.Infof(" ResponseHeaderTimeout: %v", config.HTTP.ResponseHeaderTimeout)
 	s.wsdlMatch = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
 }
@@ -130,7 +141,13 @@ func (s *Server) ListenAndServe() error {
 		done <- err
 	}
 
-	var donePrimary, doneSecondary, doneSSL chan error
+	// PROBLEM: if one of these listeners errors out, then we won't know it until all other listeners
+	// have finished too. We need a different model here, like a polling loop, instead of sequential code.
+	listenAndRunHttpBridge := func(done chan error) {
+		done <- s.runHttpBridgeServers()
+	}
+
+	var donePrimary, doneSecondary, doneSSL, doneHttpBridge chan error
 	donePrimary = make(chan error)
 	go listenAndRunHTTP(&s.listener, httpPort, donePrimary)
 	if httpPortSecondary != "" {
@@ -141,6 +158,8 @@ func (s *Server) ListenAndServe() error {
 		doneSSL = make(chan error)
 		go listenAndRunSSL(&s.listenerSSL, sslPort, doneSSL)
 	}
+	doneHttpBridge = make(chan error)
+	go listenAndRunHttpBridge(doneHttpBridge)
 
 	// Wait for all potential listeners to finish
 	err := []error{}
@@ -152,6 +171,9 @@ func (s *Server) ListenAndServe() error {
 	}
 	if doneSSL != nil {
 		err = append(err, <-doneSSL)
+	}
+	if doneHttpBridge != nil {
+		err = append(err, <-doneHttpBridge)
 	}
 	if len(err) == 0 {
 		return errors.New("Server not configured to listen on any ports")
@@ -243,7 +265,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "", http.StatusTeapot)
 		return
 	}
-	newurl, requirePermission, passThroughAuth := s.router.ProcessRoute(req.URL)
+	newurl, requirePermission, passThroughAuth := s.translator.processRoute(req.URL)
 
 	if s.debugRoutes {
 		s.errorLog.Infof("(%v) -> (%v)", req.RequestURI, newurl)
@@ -264,15 +286,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	switch parse_scheme(newurl) {
-	case "http":
+	case scheme_http:
+		fallthrough
+	case scheme_https:
 		s.forwardHttp(w, req, newurl)
-	case "ws":
+	case scheme_httpbridge:
+		s.forwardHttpBridge(w, req, newurl)
+	case scheme_ws:
 		s.forwardWebsocket(w, req, newurl)
+	default:
+		s.errorLog.Errorf("Unrecognized scheme (%v) -> (%v)", req.RequestURI, newurl)
+		http.Error(w, "Unrecognized forwarding URL", http.StatusInternalServerError)
 	}
 }
 
 /*
-forwardHTTP connects to all http scheme backends and copies bidirectionaly between the incomming
+forwardHTTP connects to all http scheme backends and copies bidirectionaly between the incoming
 connections and the backend connections. It also copies required HTTP headers between the connections making the
 router "middle man" invisible to incomming connections.
 The body part of both requests and responses are implemented as Readers, thus allowing the body contents
@@ -371,6 +400,12 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 	wsServer.ServeHTTP(w, req)
 }
 
+func (s *Server) forwardHttpBridge(w http.ResponseWriter, req *http.Request, newurl string) {
+	parsed, _ := url.Parse(newurl)
+	port, _ := strconv.Atoi(parsed.Host)
+	s.httpBridgeServers[port].ServeHTTP(w, req)
+}
+
 // Returns true if the request should continue to be passed through the router
 // We make a round-trip to imqsauth here to check the credentials of the incoming request.
 // This adds about a 0.5ms latency to the request. It might be worthwhile to embed
@@ -410,7 +445,71 @@ func (s *Server) Stop() {
 	if s.listenerSSL != nil {
 		s.listenerSSL.Close()
 	}
+	for _, v := range s.httpBridgeServers {
+		v.Stop()
+	}
 	s.waiter.Wait()
+}
+
+// Start HttpBridge listeners on all the ports that are configured.
+// It doesn't make sense to delay this process until the first incoming request for a particular
+// backend, since HttpBridge backends will constantly be trying to connect to us, and
+// probably emitting warnings to their logs if they are unable to connect.
+func (s *Server) runHttpBridgeServers() error {
+	done := make(chan error)
+	nwaiting := 0
+	for _, v := range s.translator.allRoutes() {
+		if v.scheme() != scheme_httpbridge {
+			continue
+		}
+		parsed, err := url.Parse(v.target.baseUrl)
+		if err != nil {
+			return fmt.Errorf(`Invalid URL "%v": %v`, v.target.baseUrl, err)
+		}
+		port, _ := strconv.Atoi(parsed.Host)
+		if port < 1 || port > 65535 {
+			return fmt.Errorf(`Invalid port specification in httpbridge URL "%v"`, v.target.baseUrl)
+		}
+		if s.httpBridgeServers[port] != nil {
+			continue
+		}
+		hs := &httpbridge.Server{
+			DisableHttpListener: true,
+			BackendPort:         fmt.Sprintf(":%v", port),
+		}
+		hs.Log.Target = s.errorLog
+		hs.Log.Level = makeHttpBridgeLogLevel(s.errorLog.Level)
+		s.httpBridgeServers[port] = hs
+		go func() {
+			nwaiting++
+			done <- hs.ListenAndServe()
+		}()
+	}
+	var firstErr error
+	for nwaiting != 0 {
+		err := <-done
+		nwaiting--
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func makeHttpBridgeLogLevel(l log.Level) httpbridge.LogLevel {
+	switch l {
+	case log.Trace:
+		return httpbridge.LogLevelDebug
+	case log.Debug:
+		return httpbridge.LogLevelDebug
+	case log.Info:
+		return httpbridge.LogLevelInfo
+	case log.Warn:
+		return httpbridge.LogLevelWarn
+	case log.Error:
+		return httpbridge.LogLevelError
+	}
+	return httpbridge.LogLevelDebug
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
