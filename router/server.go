@@ -1,14 +1,6 @@
 package router
 
-// NOTE: It feels wrong to have to copy stuff out of the standard library and in here.
-// Two places where we do that:
-// 1. createSSLListener()
-// 2. tcpKeepAliveListener
-// It would be good to get rid of that. I think the thing forcing our hand here is apachelog.
-
 import (
-	"crypto/tls"
-	"errors"
 	"fmt"
 	"github.com/IMQS/log"
 	"github.com/IMQS/serviceauth"
@@ -19,29 +11,24 @@ import (
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
-	"net"
+	golog "log"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 // Router Server
 type Server struct {
-	HttpServer        *http.Server
-	httpTransport     *ms_http.Transport
+	httpTransport     *ms_http.Transport // For talking to backend services
 	configHttp        ConfigHTTP
-	debugRoutes       bool
+	accessLogFile     string
+	debugRoutes       bool // If enabled, dumps every translated route to the error log
 	translator        urlTranslator
 	errorLog          *log.Logger
-	listener          net.Listener
-	listenerSecondary net.Listener
-	listenerSSL       net.Listener
-	waiter            sync.WaitGroup
 	wsdlMatch         *regexp.Regexp             // hack for serving static content
 	httpBridgeServers map[int]*httpbridge.Server // Keys of the map are httpbridge backend port numbers
 }
@@ -51,16 +38,10 @@ func NewServer(config *Config) (*Server, error) {
 	var err error
 	s := &Server{}
 	s.configHttp = config.HTTP
-	s.HttpServer = &http.Server{}
 	s.httpBridgeServers = map[int]*httpbridge.Server{}
 
-	// Using newer apachelog (see comments in package includes list)
-	//s.HttpServer.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, openLog(config.AccessLog, os.Stdout))
-
-	// Using older apachelog
-	s.HttpServer.Handler = apachelog.NewHandler(s, openLog(config.AccessLog, os.Stdout))
-
 	s.debugRoutes = config.DebugRoutes
+	s.accessLogFile = config.AccessLog
 	s.errorLog = log.New(pickLogfile(config.ErrorLog))
 	if config.LogLevel != "" {
 		if lev, err := log.ParseLevel(config.LogLevel); err != nil {
@@ -92,98 +73,75 @@ func NewServer(config *Config) (*Server, error) {
 	return s, nil
 }
 
-// Run the server
+// Run the server.
+// Returns the first error from the first listener that aborts.
 func (s *Server) ListenAndServe() error {
-	httpPort := fmt.Sprintf(":%v", s.configHttp.GetPort())
-	httpPortSecondary := ""
+	httpAddr := fmt.Sprintf(":%v", s.configHttp.GetPort())
+	httpAddrSecondary := ""
 	if s.configHttp.SecondaryPort != 0 {
-		httpPortSecondary = fmt.Sprintf(":%v", s.configHttp.SecondaryPort)
+		httpAddrSecondary = fmt.Sprintf(":%v", s.configHttp.SecondaryPort)
 	}
-	sslPort := ""
+	secureAddr := ""
 	if s.configHttp.EnableHTTPS {
-		sslPort = ":https"
+		secureAddr = ":https"
 		if s.configHttp.HTTPSPort != 0 {
-			sslPort = fmt.Sprintf(":%v", s.configHttp.HTTPSPort)
+			secureAddr = fmt.Sprintf(":%v", s.configHttp.HTTPSPort)
 		}
 	}
 
-	listenAndRunHTTP := func(listener *net.Listener, port string, done chan error) {
+	errors := make(chan error)
+
+	accessLog := openLog(s.accessLogFile, os.Stdout)
+
+	logForwarder := golog.New(log.NewForwarder(0, log.Info, s.errorLog), "", 0)
+
+	runHttp := func(addr string, secure bool, errors chan error) {
+		hs := &http.Server{}
+		hs.Addr = addr
+		hs.Handler = s
+		hs.ErrorLog = logForwarder
+
+		// Newer apachelog (see comments in package includes list)
+		//hs.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, accessLog)
+
+		// Older apachelog
+		hs.Handler = apachelog.NewHandler(s, accessLog)
+
 		var err error
 		for {
-			var ln net.Listener
-			if ln, err = net.Listen("tcp", port); err != nil {
-				s.errorLog.Errorf("net.Listen (port %v) error: %s\n", port, err.Error())
-				break
+			if secure {
+				err = hs.ListenAndServeTLS(s.configHttp.CertFile, s.configHttp.CertKeyFile)
+			} else {
+				err = hs.ListenAndServe()
 			}
-			*listener = tcpKeepAliveListener{ln.(*net.TCPListener)}
-			err = s.HttpServer.Serve(*listener)
 			if !s.autoRestartAfterError(err) {
 				break
 			}
 		}
-		done <- err
+		errors <- err
 	}
 
-	listenAndRunSSL := func(listener *net.Listener, port string, done chan error) {
-		var err error
-		for {
-			var ln net.Listener
-			if ln, err = s.createSSLListener(port); err != nil {
-				s.errorLog.Errorf("createSSLListener error: %s\n", err.Error())
-				break
-			}
-			*listener = ln
-			err = s.HttpServer.Serve(*listener)
-			if !s.autoRestartAfterError(err) {
-				break
-			}
-		}
-		done <- err
+	go runHttp(httpAddr, false, errors)
+	if httpAddrSecondary != "" {
+		go runHttp(httpAddrSecondary, false, errors)
 	}
+	if secureAddr != "" {
+		go runHttp(secureAddr, true, errors)
+	}
+	go func() {
+		errors <- s.runHttpBridgeServers()
+	}()
 
-	// PROBLEM: if one of these listeners errors out, then we won't know it until all other listeners
-	// have finished too. We need a different model here, like a polling loop, instead of sequential code.
-	listenAndRunHttpBridge := func(done chan error) {
-		done <- s.runHttpBridgeServers()
-	}
-
-	var donePrimary, doneSecondary, doneSSL, doneHttpBridge chan error
-	donePrimary = make(chan error)
-	go listenAndRunHTTP(&s.listener, httpPort, donePrimary)
-	if httpPortSecondary != "" {
-		doneSecondary = make(chan error)
-		go listenAndRunHTTP(&s.listenerSecondary, httpPortSecondary, doneSecondary)
-	}
-	if sslPort != "" {
-		doneSSL = make(chan error)
-		go listenAndRunSSL(&s.listenerSSL, sslPort, doneSSL)
-	}
-	doneHttpBridge = make(chan error)
-	go listenAndRunHttpBridge(doneHttpBridge)
-
-	// Wait for all potential listeners to finish
-	err := []error{}
-	if donePrimary != nil {
-		err = append(err, <-donePrimary)
-	}
-	if doneSecondary != nil {
-		err = append(err, <-doneSecondary)
-	}
-	if doneSSL != nil {
-		err = append(err, <-doneSSL)
-	}
-	if doneHttpBridge != nil {
-		err = append(err, <-doneHttpBridge)
-	}
-	if len(err) == 0 {
-		return errors.New("Server not configured to listen on any ports")
-	}
-	// Return the first non-nil error
-	for _, e := range err {
-		if e != nil {
-			return e
+	// Wait for the first non-nil error and return it
+	for {
+		err := <-errors
+		if err != nil {
+			s.errorLog.Infof(`Router exiting. First non-nil error was "%v"`, err)
+			return err
 		}
 	}
+
+	// unreachable
 	return nil
 }
 
@@ -194,43 +152,14 @@ func pickLogfile(logfile string) string {
 	return log.Stdout
 }
 
+// Certain benign errors seem to occur frequently, and we don't want to shut ourselves down when
+// that happens. Instead, we just fire ourselves up again.
 func (s *Server) autoRestartAfterError(err error) bool {
-	if err == nil {
-		// Is this really the right thing to do? I don't know anymore... [BMH 2015-03-06]
-		return true
-	}
 	if strings.Contains(err.Error(), "specified network name is no longer available") {
 		s.errorLog.Warnf("Automatically restarting after receiving error 64")
 		return true
 	}
 	return false
-}
-
-func (s *Server) createSSLListener(port string) (net.Listener, error) {
-	// This function was modelled on the code inside the standard library's ListenAndServeTLS()
-
-	config := &tls.Config{}
-	if config.NextProtos == nil {
-		config.NextProtos = []string{"http/1.1"}
-	}
-
-	if _, err := tls.LoadX509KeyPair(s.configHttp.CertFile, s.configHttp.CertKeyFile); err != nil {
-		return nil, fmt.Errorf("Error reading cert %v: %v", s.configHttp.CertFile, err)
-	}
-
-	var err error
-	config.Certificates = make([]tls.Certificate, 1)
-	config.Certificates[0], err = tls.LoadX509KeyPair(s.configHttp.CertFile, s.configHttp.CertKeyFile)
-	if err != nil {
-		return nil, err
-	}
-
-	ln, err := net.Listen("tcp", port)
-	if err != nil {
-		return nil, err
-	}
-
-	return tls.NewListener(tcpKeepAliveListener{ln.(*net.TCPListener)}, config), nil
 }
 
 // Detect illegal requests
@@ -249,9 +178,6 @@ ServeHTTP is the single router access point to the frontdoor server. All request
 between these pipes.
 */
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	s.waiter.Add(1)
-	defer s.waiter.Done()
-
 	// HACK! Doesn't belong here!
 	// Catch wsdl here to statically serve.
 	filename := s.wsdlMatch.FindString(req.RequestURI)
@@ -432,25 +358,6 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 	}
 }
 
-func (s *Server) Stop() {
-	s.errorLog.Info("Shutting down")
-	if s.listener != nil {
-		s.listener.Close()
-	}
-
-	if s.listenerSecondary != nil {
-		s.listenerSecondary.Close()
-	}
-
-	if s.listenerSSL != nil {
-		s.listenerSSL.Close()
-	}
-	for _, v := range s.httpBridgeServers {
-		v.Stop()
-	}
-	s.waiter.Wait()
-}
-
 // Start HttpBridge listeners on all the ports that are configured.
 // It doesn't make sense to delay this process until the first incoming request for a particular
 // backend, since HttpBridge backends will constantly be trying to connect to us, and
@@ -480,8 +387,8 @@ func (s *Server) runHttpBridgeServers() error {
 		hs.Log.Target = s.errorLog
 		hs.Log.Level = makeHttpBridgeLogLevel(s.errorLog.Level)
 		s.httpBridgeServers[port] = hs
+		nwaiting++
 		go func() {
-			nwaiting++
 			done <- hs.ListenAndServe()
 		}()
 	}
@@ -558,7 +465,6 @@ func copyheadersOut(srcHost string, src ms_http.Header, dstHost string, dst http
 	}
 }
 
-//copy all headers from src to dst
 func copyHeaders(src http.Header, dst http.Header) {
 	for k, vv := range src {
 		for _, v := range vv {
@@ -577,23 +483,4 @@ func openLog(filename string, defaultWriter io.Writer) io.Writer {
 		MaxBackups: 3,
 		MaxAge:     90, // days
 	}
-}
-
-// This is copied from the standard library.
-// See that for reference.
-type tcpKeepAliveListener struct {
-	*net.TCPListener
-}
-
-func (ln tcpKeepAliveListener) Accept() (c net.Conn, err error) {
-	tc, err := ln.AcceptTCP()
-	if err != nil {
-		return
-	}
-	tc.SetKeepAlive(true)
-	tc.SetKeepAlivePeriod(3 * time.Minute)
-	return tc, nil
-}
-
-func init() {
 }

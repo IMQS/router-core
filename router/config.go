@@ -25,9 +25,9 @@ Example configuration file:
 		"HTTPSPort": 444,										Override default HTTPS port (443)
 		"CertKeyFile": "c:/imqsbin/conf/ssl.key"				SSL private key
 		"CertFile": "c:/imqsbin/conf/ssl.crt"					SSL certificate file. Concatenation of your certificate with the CA certificate chain.
-		"DisableKeepAlive": true,								Controls http.Transport.DisableKeepAlive. Default = false
-		"MaxIdleConnections": 50,								Controls http.Transport.MaxIdleConnections. Default = 0 (uses Go std library default)
-		"ResponseHeaderTimeout": 60								Controls http.Transport.ResponseHeaderTimeout. Default = 0 (uses Go std library default)
+		"DisableKeepAlive": true,								Controls http.Transport.DisableKeepAlive (backend comms). Default = false
+		"MaxIdleConnections": 50,								Controls http.Transport.MaxIdleConnections (backend comms). Default = 0 (uses Go std library default)
+		"ResponseHeaderTimeout": 60								Controls http.Transport.ResponseHeaderTimeout (backend comms). Default = 0 (uses Go std library default)
 	},
 	"Targets": {
 		"MAPS": {												Targets names must be CAPITAL. This rule exists solely to enforce a convention.

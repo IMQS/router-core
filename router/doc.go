@@ -31,6 +31,12 @@ The router automatically logs in to the backend authentication service, and stor
 session tokens in RAM. Future requests to that same backend automatically get the
 session token added into the HTTP headers before forwarding the request.
 
+Stopping A Server
+
+The Go standard library does not make it possible to stop an HTTP server. At least, it is
+not possible to do so without creating your own Listener. BUT, if you create your own
+Listener, then you don't get HTTP/2 functionality. This is why we have no Stop() function.
+
 Known issues:
 
 The pass-through authentication does not handle the situation where the backend has cleared it's
