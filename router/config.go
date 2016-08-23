@@ -22,6 +22,7 @@ Example configuration file:
 		"Port": 80,												Primary HTTP port
 		"SecondaryPort": 8080,									One can optionally listen for HTTP on two ports
 		"EnableHTTPS": true,									Enable HTTPS
+		"RedirectHTTP": true,									Redirect any domain request to HTTP(port 80) to use HTTPS(port 443) to force secure connection to user
 		"HTTPSPort": 444,										Override default HTTPS port (443)
 		"CertKeyFile": "c:/imqsbin/conf/ssl.key"				SSL private key
 		"CertFile": "c:/imqsbin/conf/ssl.crt"					SSL certificate file. Concatenation of your certificate with the CA certificate chain.
@@ -102,6 +103,7 @@ type ConfigHTTP struct {
 	DisableKeepAlive      bool
 	MaxIdleConnections    int
 	ResponseHeaderTimeout int
+	RedirectHTTP          bool
 }
 
 type ConfigPassThroughAuth struct {
@@ -239,6 +241,9 @@ func (c *Config) Overlay(other *Config) {
 	}
 	if other.HTTP.EnableHTTPS {
 		c.HTTP.EnableHTTPS = other.HTTP.EnableHTTPS
+	}
+	if other.HTTP.RedirectHTTP {
+		c.HTTP.RedirectHTTP = other.HTTP.RedirectHTTP
 	}
 	if other.HTTP.CertFile != "" {
 		c.HTTP.CertFile = other.HTTP.CertFile

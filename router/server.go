@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"net"
 )
 
 // Router Server
@@ -31,6 +32,15 @@ type Server struct {
 	errorLog          *log.Logger
 	wsdlMatch         *regexp.Regexp             // hack for serving static content
 	httpBridgeServers map[int]*httpbridge.Server // Keys of the map are httpbridge backend port numbers
+}
+
+type frontServer struct {
+	isSecure bool
+	server *Server
+}
+
+func (f *frontServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	f.server.ServeHTTP(f.isSecure, w, req)
 }
 
 // NewServer creates a new server instance; starting up logging and creating a routing instance.
@@ -95,17 +105,18 @@ func (s *Server) ListenAndServe() error {
 
 	logForwarder := golog.New(log.NewForwarder(0, log.Info, s.errorLog), "", 0)
 
+
 	runHttp := func(addr string, secure bool, errors chan error) {
 		hs := &http.Server{}
 		hs.Addr = addr
-		hs.Handler = s
+		hs.Handler = &frontServer{secure, s}
 		hs.ErrorLog = logForwarder
 
 		// Newer apachelog (see comments in package includes list)
 		//hs.Handler = apachelog.NewHandler(`%h - %u %t "%r" %s %b %T`, s, accessLog)
 
 		// Older apachelog
-		hs.Handler = apachelog.NewHandler(s, accessLog)
+		hs.Handler = apachelog.NewHandler(hs.Handler, accessLog)
 
 		var err error
 		for {
@@ -177,7 +188,7 @@ ServeHTTP is the single router access point to the frontdoor server. All request
  It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
 between these pipes.
 */
-func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Request) {
 	// HACK! Doesn't belong here!
 	// Catch wsdl here to statically serve.
 	filename := s.wsdlMatch.FindString(req.RequestURI)
@@ -191,6 +202,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "", http.StatusTeapot)
 		return
 	}
+
+	// This redirects all HTTP request to use HTTPS for all connections which originate from a domain name.
+	if (s.configHttp.RedirectHTTP && !isSecure && req.Proto == "HTTP/1.1" && !net.ParseIP(req.Host)) {
+		http.Redirect(w, req, "https://" + req.Host + req.URL.String(), http.StatusMovedPermanently)
+		return
+	}
+
 	newurl, requirePermission, passThroughAuth := s.translator.processRoute(req.URL)
 
 	if s.debugRoutes {
