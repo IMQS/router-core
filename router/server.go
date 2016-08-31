@@ -204,7 +204,7 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 	}
 
 	// This redirects all HTTP request to use HTTPS for all connections which originate from a domain name.
-	if (s.configHttp.RedirectHTTP && !isSecure && req.Proto == "HTTP/1.1" && !net.ParseIP(req.Host)) {
+	if (s.configHttp.RedirectHTTP && !isSecure && req.Proto == "HTTP/1.1" && net.ParseIP(req.Host) == nil && req.Host != "localhost") {
 		http.Redirect(w, req, "https://" + req.Host + req.URL.String(), http.StatusMovedPermanently)
 		return
 	}
