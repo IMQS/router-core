@@ -69,9 +69,16 @@ func authPassThrough(log *log.Logger, w http.ResponseWriter, req *http.Request, 
 		return authInjectPureHub(log, w, req, target)
 	case AuthPassThroughYellowfin:
 		return authInjectYellowfin(log, w, req, authData, target)
+	case AuthPassThroughSitePro:
+		return authInjectSitePro(log, w, req, target)
 	default:
 		return true
 	}
+}
+
+func authInjectSitePro(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
+	req.SetBasicAuth(target.config.Username, target.config.Password)
+	return true
 }
 
 func authInjectPureHub(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {

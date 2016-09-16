@@ -80,6 +80,7 @@ const (
 	AuthPassThroughNone      AuthPassThroughType = ""
 	AuthPassThroughPureHub                       = "PureHub"
 	AuthPassThroughYellowfin                     = "Yellowfin"
+	AuthPassThroughSitePro                       = "SitePro"
 )
 
 type Config struct {
