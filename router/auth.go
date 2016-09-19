@@ -39,10 +39,11 @@ type yellowfinLoginParameters struct {
 // This is stored in the 'value' part of targetPassThroughAuth.tokenMap
 // The key is the user identity
 type yellowfinToken struct {
-	Expires    time.Time
-	JSESSIONID string
-	IPID       string
-	Parameters yellowfinLoginParameters
+	UserSession string
+	Expires     time.Time
+	JSESSIONID  string
+	IPID        string
+	Parameters  yellowfinLoginParameters
 }
 
 // We configure Yellowfin so that internally, it's sessions expire after 31 days.
@@ -174,6 +175,9 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		return false
 	}
 
+	// Get the IMQS user session if present
+	c, _ := req.Cookie(serviceauth.Imqsauth_cookie)
+
 	switch req.URL.Path {
 	// Used to configure extra parameters present in YF logins
 	case "/yellowfin/loginparameters":
@@ -214,11 +218,8 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		}
 
 		// Copy the IMQS8 session cookie to the new logout call
-		for _, c := range req.Cookies() {
-			if c.Name == "session" {
-				logoutReq.AddCookie(c)
-				break
-			}
+		if c != nil {
+			logoutReq.AddCookie(c)
 		}
 
 		target.lock.Lock()
@@ -239,6 +240,22 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 		defer logoutResp.Body.Close()
 
 		return false // do not forward this to YF
+
+	// The front-end with an open Iframe to YF will keep polling to check if it is
+	// the session currently allowed to access YF. If another instance is opened with the same user,
+	// that instance will get access, and the first Iframe should exit and go to IMQS home page.
+	case "/yellowfin/checksession":
+		target.lock.RLock()
+		token_yf, exists := target.tokenMap[authData.Identity].(*yellowfinToken)
+		if !exists || token_yf.UserSession == "" {
+			fmt.Fprintf(w, "%s", "No Session Found")
+		} else {
+			fmt.Fprintf(w, "%s", token_yf.UserSession)
+		}
+		target.lock.RUnlock()
+
+		return false // do not forward this to YF
+
 	default:
 	}
 
@@ -256,7 +273,8 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 			// login parameters ready for the next login.
 			yfLoginparams = token_yf.Parameters
 
-			if token_yf.Expires.After(time.Now()) {
+			// We only forward request if session valid and not expired.
+			if token_yf.Expires.After(time.Now()) && token_yf.UserSession == c.Value {
 				done = true
 				injectYellowfinCookies(req, token_yf)
 			}
@@ -266,9 +284,9 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 			return true
 		}
 
-		// -- Acquire new token --
+		// -- User not logged in or session expired. Acquire new token --
 
-		// Acquire a lock on the USER who is trying to login to yellowfin
+		// Acquire a lock on the USER who is trying to login to Yellowfin
 		haveUserLock := false
 		target.lock.Lock()
 		if !target.tokenLock[authData.Identity] {
@@ -351,6 +369,11 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 		case "IPID":
 			token.IPID = c.Value
 		}
+	}
+
+	// Used to keep track of which session has control over a user's single allowed YF session
+	if cookieSession != nil {
+		token.UserSession = cookieSession.Value
 	}
 
 	if token.JSESSIONID != "" && token.IPID != "" {
