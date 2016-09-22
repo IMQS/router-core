@@ -243,12 +243,13 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 
 	// The front-end with an open Iframe to YF will keep polling to check if it is
 	// the session currently allowed to access YF. If another instance is opened with the same user,
-	// that instance will get access, and the first Iframe should exit and go to IMQS home page.
+	// that instance's session will get access, and the first Iframe should exit and go to IMQS home page.
 	case "/yellowfin/checksession":
 		target.lock.RLock()
 		token_yf, exists := target.tokenMap[authData.Identity].(*yellowfinToken)
 		if !exists || token_yf.UserSession == "" {
-			fmt.Fprintf(w, "%s", "No Session Found")
+			// No session exists - We still want onSuccess in the front-end, thus we write 201.
+			w.WriteHeader(201)
 		} else {
 			fmt.Fprintf(w, "%s", token_yf.UserSession)
 		}
