@@ -81,6 +81,7 @@ const (
 	AuthPassThroughPureHub                       = "PureHub"
 	AuthPassThroughYellowfin                     = "Yellowfin"
 	AuthPassThroughSitePro                       = "SitePro"
+	AuthPassThroughECS                           = "ECS"
 )
 
 type Config struct {

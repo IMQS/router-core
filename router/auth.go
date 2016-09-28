@@ -72,9 +72,16 @@ func authPassThrough(log *log.Logger, w http.ResponseWriter, req *http.Request, 
 		return authInjectYellowfin(log, w, req, authData, target)
 	case AuthPassThroughSitePro:
 		return authInjectSitePro(log, w, req, target)
+	case AuthPassThroughECS:
+		return authInjectECS(log, w, req, target)
 	default:
 		return true
 	}
+}
+
+func authInjectECS(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
+	req.SetBasicAuth(target.config.Username, target.config.Password)
+	return true
 }
 
 func authInjectSitePro(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
