@@ -1,11 +1,9 @@
 package router
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"github.com/IMQS/serviceconfigsgo"
 	"net/url"
-	"os"
 	"strings"
 )
 
@@ -82,6 +80,9 @@ const (
 	AuthPassThroughYellowfin                     = "Yellowfin"
 	AuthPassThroughSitePro                       = "SitePro"
 	AuthPassThroughECS                           = "ECS"
+	serviceConfigFileName                        = "router-config.json"
+	serviceConfigVersion                         = 1
+	serviceName                                  = "ImqsRouter"
 )
 
 type Config struct {
@@ -186,22 +187,9 @@ func (c *Config) verify() error {
 }
 
 func (c *Config) LoadFile(filename string) error {
-	var file *os.File
-	var all []byte
-	var err error
-	if file, err = os.Open(filename); err != nil {
-		return err
-	}
-	defer file.Close()
-	if all, err = ioutil.ReadAll(file); err != nil {
-		return err
-	}
-	return c.LoadString(string(all))
-}
-
-func (c *Config) LoadString(json_config string) error {
 	c.Reset()
-	if err := json.Unmarshal([]byte(json_config), c); err != nil {
+	err := serviceconfig.GetConfig(filename, serviceName, serviceConfigVersion, serviceConfigFileName, c)
+	if err != nil {
 		return err
 	}
 	return c.verify()

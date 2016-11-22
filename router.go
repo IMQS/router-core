@@ -30,10 +30,6 @@ func realMain() (result int) {
 		flags.Parse(os.Args[1:])
 	}
 
-	if *mainconfig == "" {
-		panic("You must set mainconfig")
-	}
-
 	config := &router.Config{}
 	err := config.LoadFile(*mainconfig)
 	if err != nil {
