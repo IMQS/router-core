@@ -5,6 +5,7 @@ import (
 	"github.com/IMQS/serviceconfigsgo"
 	"net/url"
 	"strings"
+	"encoding/json"
 )
 
 /*
@@ -190,6 +191,14 @@ func (c *Config) LoadFile(filename string) error {
 	c.Reset()
 	err := serviceconfig.GetConfig(filename, serviceName, serviceConfigVersion, serviceConfigFileName, c)
 	if err != nil {
+		return err
+	}
+	return c.verify()
+}
+
+func (c *Config) LoadString(json_config string) error {
+	c.Reset()
+	if err := json.Unmarshal([]byte(json_config), c); err != nil {
 		return err
 	}
 	return c.verify()
