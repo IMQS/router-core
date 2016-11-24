@@ -1,11 +1,11 @@
 package router
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/IMQS/serviceconfigsgo"
 	"net/url"
 	"strings"
-	"encoding/json"
 )
 
 /*
@@ -202,68 +202,4 @@ func (c *Config) LoadString(json_config string) error {
 		return err
 	}
 	return c.verify()
-}
-
-// Overlay 'other' on top of this configuration
-// We lack a perfect notion of 'defined'. For example, DisableKeepAlive is a bool,
-// so we don't know whether it was defined in the JSON or not. This is OK for us,
-// since the only thing we currently need to overlay is Proxy
-func (c *Config) Overlay(other *Config) {
-	if other.Proxy != "" {
-		c.Proxy = other.Proxy
-	}
-
-	// Logs
-	if other.AccessLog != "" {
-		c.AccessLog = other.AccessLog
-	}
-	if other.ErrorLog != "" {
-		c.ErrorLog = other.ErrorLog
-	}
-	if other.LogLevel != "" {
-		c.LogLevel = other.LogLevel
-	}
-
-	if other.DebugRoutes {
-		c.DebugRoutes = other.DebugRoutes
-	}
-
-	// HTTP
-	if other.HTTP.Port != 0 {
-		c.HTTP.Port = other.HTTP.Port
-	}
-	if other.HTTP.SecondaryPort != 0 {
-		c.HTTP.SecondaryPort = other.HTTP.SecondaryPort
-	}
-	if other.HTTP.HTTPSPort != 0 {
-		c.HTTP.HTTPSPort = other.HTTP.HTTPSPort
-	}
-	if other.HTTP.EnableHTTPS {
-		c.HTTP.EnableHTTPS = other.HTTP.EnableHTTPS
-	}
-	if other.HTTP.RedirectHTTP {
-		c.HTTP.RedirectHTTP = other.HTTP.RedirectHTTP
-	}
-	if other.HTTP.CertFile != "" {
-		c.HTTP.CertFile = other.HTTP.CertFile
-	}
-	if other.HTTP.CertKeyFile != "" {
-		c.HTTP.CertKeyFile = other.HTTP.CertKeyFile
-	}
-	if other.HTTP.DisableKeepAlive {
-		c.HTTP.DisableKeepAlive = other.HTTP.DisableKeepAlive
-	}
-	if other.HTTP.MaxIdleConnections != 0 {
-		c.HTTP.MaxIdleConnections = other.HTTP.MaxIdleConnections
-	}
-	if other.HTTP.ResponseHeaderTimeout != 0 {
-		c.HTTP.ResponseHeaderTimeout = other.HTTP.ResponseHeaderTimeout
-	}
-
-	for match, replace := range other.Routes {
-		c.Routes[match] = replace
-	}
-	for name, cfg := range other.Targets {
-		c.Targets[name] = cfg
-	}
 }

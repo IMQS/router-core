@@ -12,6 +12,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
 	golog "log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"net"
 )
 
 // Router Server
@@ -36,7 +36,7 @@ type Server struct {
 
 type frontServer struct {
 	isSecure bool
-	server *Server
+	server   *Server
 }
 
 func (f *frontServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -104,7 +104,6 @@ func (s *Server) ListenAndServe() error {
 	accessLog := openLog(s.accessLogFile, os.Stdout)
 
 	logForwarder := golog.New(log.NewForwarder(0, log.Info, s.errorLog), "", 0)
-
 
 	runHttp := func(addr string, secure bool, errors chan error) {
 		hs := &http.Server{}
@@ -204,8 +203,8 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 	}
 
 	// This redirects all HTTP request to use HTTPS for all connections which originate from a domain name.
-	if (s.configHttp.RedirectHTTP && !isSecure && req.Proto == "HTTP/1.1" && net.ParseIP(req.Host) == nil && req.Host != "localhost") {
-		http.Redirect(w, req, "https://" + req.Host + req.URL.String(), http.StatusMovedPermanently)
+	if s.configHttp.RedirectHTTP && !isSecure && req.Proto == "HTTP/1.1" && net.ParseIP(req.Host) == nil && req.Host != "localhost" {
+		http.Redirect(w, req, "https://"+req.Host+req.URL.String(), http.StatusMovedPermanently)
 		return
 	}
 
