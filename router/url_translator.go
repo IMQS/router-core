@@ -46,6 +46,9 @@ SitePro:
 
 ECS:
 	none
+
+CouchDB:
+	none
 */
 type targetPassThroughAuth struct {
 	lock         sync.RWMutex // Guards access to all state except for "config", which is immutable
