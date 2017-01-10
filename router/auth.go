@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -74,6 +75,8 @@ func authPassThrough(log *log.Logger, w http.ResponseWriter, req *http.Request, 
 		return authInjectSitePro(log, w, req, target)
 	case AuthPassThroughECS:
 		return authInjectECS(log, w, req, target)
+	case AuthPassThroughCouchDB:
+		return authInjectCouchDB(log, w, req, authData, target)
 	default:
 		return true
 	}
@@ -87,6 +90,23 @@ func authInjectECS(log *log.Logger, w http.ResponseWriter, req *http.Request, ta
 func authInjectSitePro(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
 	req.SetBasicAuth(target.config.Username, target.config.Password)
 	return true
+}
+
+func authInjectCouchDB(log *log.Logger, w http.ResponseWriter, req *http.Request, authData *serviceauth.ImqsAuthResponse, target *targetPassThroughAuth) bool {
+	// Allow pings to the CouchDB service
+	if req.URL.Path == "/userstorage/" {
+		return true
+	}
+
+	splitPath := strings.SplitAfter(req.URL.Path, "userdb-")
+	userIDSplitPath := strings.Split(splitPath[1], "/")
+	userIDPath, _ := strconv.Atoi(userIDSplitPath[0])
+
+	// Ensure logged-in user can only access his own data
+	if authData.UserId == userIDPath {
+		return true
+	}
+	return false
 }
 
 func authInjectPureHub(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {

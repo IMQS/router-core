@@ -81,6 +81,7 @@ const (
 	AuthPassThroughYellowfin                     = "Yellowfin"
 	AuthPassThroughSitePro                       = "SitePro"
 	AuthPassThroughECS                           = "ECS"
+	AuthPassThroughCouchDB                       = "CouchDB"
 	serviceConfigFileName                        = "router-config.json"
 	serviceConfigVersion                         = 1
 	serviceName                                  = "ImqsRouter"
