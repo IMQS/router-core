@@ -208,6 +208,12 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 		return
 	}
 
+	// Catch ping requests
+	if (req.RequestURI == "/router/ping") {
+		s.Pong(w, req)
+		return
+	}
+
 	newurl, requirePermission, passThroughAuth := s.translator.processRoute(req.URL)
 
 	if s.debugRoutes {
@@ -418,6 +424,11 @@ func (s *Server) runHttpBridgeServers() error {
 		}
 	}
 	return firstErr
+}
+
+func (s *Server) Pong(w http.ResponseWriter, req *http.Request) {
+	timestamp := time.Now().Unix()
+	fmt.Fprintf(w, `{"Timestamp":%v}`, timestamp);
 }
 
 func makeHttpBridgeLogLevel(l log.Level) httpbridge.LogLevel {
