@@ -98,6 +98,8 @@ func authInjectCouchDB(log *log.Logger, w http.ResponseWriter, req *http.Request
 		return true
 	}
 
+	req.SetBasicAuth(target.config.Username, target.config.Password)
+
 	splitPath := strings.SplitAfter(req.URL.Path, "userdb-")
 	userIDSplitPath := strings.Split(splitPath[1], "/")
 	userIDPath, _ := strconv.Atoi(userIDSplitPath[0])
