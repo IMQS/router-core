@@ -84,6 +84,34 @@ func authPassThrough(log *log.Logger, w http.ResponseWriter, req *http.Request, 
 
 func authInjectECS(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
 	req.SetBasicAuth(target.config.Username, target.config.Password)
+
+	actionUrl := strings.Split(req.URL.String(), "/") // Example: "ecs/ACCESS/FWVERSION/" or "ecs/sam/ForceSim1/"
+	context := "{}"
+	didWhat := req.URL.String()
+	toWhat := req.URL.String()
+	if len(actionUrl) == 5 && actionUrl[1] == "ecs" {
+		context = `{"url": "` + req.URL.String() + `","origin": "ecs api passthrough router"}`
+		didWhat = actionUrl[3]
+		switch actionUrl[2] {
+		case "ACCESS":
+			toWhat = "site gate: " + actionUrl[4]
+		case "sam":
+			toWhat = "site: " + actionUrl[4]
+		default:
+			http.Error(w, "Unkown url to ECS API", http.StatusBadRequest) // Don't allow unkown url's to ECS API
+			return false
+		}
+	} else {
+		http.Error(w, "Unkown url to ECS API", http.StatusBadRequest) // Don't allow unkown url's to ECS API
+		return false
+	}
+
+	statusCode, err := serviceauth.AddToAuditLog(req, didWhat, toWhat, context)
+	if err != nil {
+		log.Errorf("Error logging user action")
+		http.Error(w, err.Error(), statusCode)
+		return false
+	}
 	return true
 }
 
