@@ -209,7 +209,7 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 	}
 
 	// Catch ping requests
-	if (req.RequestURI == "/router/ping") {
+	if req.RequestURI == "/router/ping" {
 		s.Pong(w, req)
 		return
 	}
@@ -240,7 +240,7 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 	case scheme_https:
 		s.forwardHttp(w, req, newurl)
 	case scheme_httpbridge:
-		s.forwardHttpBridge(w, req, newurl)
+		s.forwardHttpBridge(isSecure, w, req, newurl)
 	case scheme_ws:
 		s.forwardWebsocket(w, req, newurl)
 	default:
@@ -272,6 +272,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 	cleaned, err := ms_http.NewRequest(req.Method, newurl, req.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	srcHost := req.Host
@@ -349,10 +350,48 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 	wsServer.ServeHTTP(w, req)
 }
 
-func (s *Server) forwardHttpBridge(w http.ResponseWriter, req *http.Request, newurl string) {
+func (s *Server) forwardHttpBridge(isSecure bool, w http.ResponseWriter, req *http.Request, newurl string) {
+	// An example mapping from original URL to newurl is
+	// http://localhost/map2/hello/foo -> httpbridge://2019/hello/foo
+	// The 'httpbridge' portion of newurl is not interesting to us. It is merely syntax
+	// of the routing table, to make it crystal clear that the backend is not another
+	// HTTP hop, but an httpbridge server.
+	// In order to be useful, we need to replace the 'httpbridge' portion of newurl
+	// with something that looks like an http URL.
+	//
+	// In summary, the URL undergoes the following three stages
+	//
+	//   https://example.imqs.co.za/map2/hello/foo   (original)
+	//   httpbridge://2019/hello/foo                 (transformed by routing table, notice that map2 prefix was removed)
+	//   https://example.imqs.co.za/hello/foo        (rewritten to be http-like. Basically, just routing table prefix is removed)
+	//
+	// Note that we only send httpbridge the part after the hostname, so in the above example,
+	// httpbridge only receives "/hello/foo". If we want to transmit the other information,
+	// then we'll add that information to headers, or to the flatbuffer.
+
+	//fmt.Printf("newurl: %v\n", newurl)
 	parsed, _ := url.Parse(newurl)
 	port, _ := strconv.Atoi(parsed.Host)
-	s.httpBridgeServers[port].ServeHTTP(w, req)
+	cleaned_prefix := ""
+	if isSecure {
+		cleaned_prefix = "https://"
+	} else {
+		cleaned_prefix = "http://"
+	}
+	cleaned_prefix += req.Host
+	cleaned_uri := parsed.Path
+	if len(parsed.RawQuery) != 0 {
+		cleaned_uri += "?" + parsed.RawQuery
+	}
+	//fmt.Printf("cleaned_prefix = %v, cleaned_uri = %v\n", cleaned_prefix, cleaned_uri)
+	cleaned, err := http.NewRequest(req.Method, cleaned_prefix+cleaned_uri, req.Body)
+	cleaned.RequestURI = cleaned_uri
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	copyHeaders(req.Header, cleaned.Header)
+	s.httpBridgeServers[port].ServeHTTP(w, cleaned)
 }
 
 // Returns true if the request should continue to be passed through the router
@@ -428,7 +467,7 @@ func (s *Server) runHttpBridgeServers() error {
 
 func (s *Server) Pong(w http.ResponseWriter, req *http.Request) {
 	timestamp := time.Now().Unix()
-	fmt.Fprintf(w, `{"Timestamp":%v}`, timestamp);
+	fmt.Fprintf(w, `{"Timestamp":%v}`, timestamp)
 }
 
 func makeHttpBridgeLogLevel(l log.Level) httpbridge.LogLevel {
@@ -481,7 +520,7 @@ func copyheadersOut(srcHost string, src ms_http.Header, dstHost string, dst http
 		for _, v := range vv {
 			if k == "Location" {
 				// Some servers will send a Location header, but that Location will be an internal network address, so we
-				// need to rewrite it to be an external address. It may be wiser to just stripe the absolute portion of Location away,
+				// need to rewrite it to be an external address. It may be wiser to just strip the absolute portion of Location away,
 				// just leaving a relative URL. This is all for Yellowfin's sake.
 				v = strings.Replace(v, srcHost, dstHost, 1)
 				if isHTTPS && strings.Index(v, "http:") == 0 {
