@@ -33,6 +33,7 @@ need to, because the Go test framework launches a separate process for each test
 */
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"golang.org/x/net/websocket"
@@ -40,11 +41,14 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+var integration_test = flag.Bool("integration_test", false, "Run the router integration tests")
 
 const mainConfig = `
 {
@@ -71,11 +75,19 @@ const mainConfig = `
 `
 
 type sandbox struct {
-	front *Server
-	back  *backend
+	front         *Server
+	back          *backend
+	configService *httptest.Server
 }
 
 func (s *sandbox) start() error {
+	//setup mock service - we do not need to setup mock services when running integration tests
+	if !*integration_test {
+		//mock the config service
+		s.configService = mockConfigService()
+		ConfigServiceUrl = s.configService.URL
+	}
+
 	s.back = newBackend()
 	s.back.httpServer.Addr = ":5000"
 	go s.back.httpServer.ListenAndServe()
@@ -92,6 +104,70 @@ func (s *sandbox) start() error {
 	go s.front.ListenAndServe()
 
 	return nil
+}
+
+func (s *sandbox) teardown() error {
+	if s.configService != nil {
+		s.configService.Close()
+	}
+	return nil
+}
+
+// Here we mock the config service. Currently, we are only mocking the add system variable functionality. We really just
+// want to make sure the router http port is being added to the config service
+func mockConfigService() *httptest.Server {
+	variableMap := make(map[string]string)
+	handleConfigService := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" {
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				fmt.Errorf("Unexpected error while reading body of message: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			//Create Variable struct
+			type VariableStruct struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			}
+
+			var variableStruct VariableStruct
+			dec := json.NewDecoder(strings.NewReader(string(body[:])))
+			if err := dec.Decode(&variableStruct); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(fmt.Sprintf("An error occurred while parsing the json: %v", err)))
+				return
+			}
+
+			expected_key := "router_http_port"
+			expected_value := "5002"
+
+			if variableStruct.Key != expected_key {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(fmt.Sprintf("Expected: %v, but got: %v", expected_key, variableStruct.Key)))
+				return
+			}
+
+			if variableStruct.Value != expected_value {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(fmt.Sprintf("Expected: %v, but got: %v", expected_value, variableStruct.Value)))
+				return
+			}
+
+			variableMap[expected_key] = expected_value
+			w.WriteHeader(http.StatusOK)
+		} else if r.Method == "GET" {
+			key := strings.TrimPrefix(r.URL.Path, "/config-service/variable/")
+			expected_value := variableMap[key]
+			w.Write([]byte(expected_value))
+			w.WriteHeader(http.StatusOK)
+		}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(handleConfigService))
+
+	return server
 }
 
 func doHttp(t *testing.T, method, url, body, expect_body string) {
@@ -119,7 +195,7 @@ func doHttpFunc(t *testing.T, method, url, body string, verifyBodyFunc func(*tes
 	verifyBodyFunc(t, string(body_response))
 }
 
-func TestVariousURL(t *testing.T) {
+func TestUnitVariousURL(t *testing.T) {
 	doHttp(t, "GET", "http://127.0.0.1:5002/gert/jan/piet", "", "Route not found\n")                                                       // Invalid route
 	doHttp(t, "GET", "http://127.0.0.1:5002/test1", "", "Method GET URL /test1 BODY ")                                                     // hello world
 	doHttp(t, "GET", "http://127.0.0.1:5002/test2/path1/path2", "", "Method GET URL /redirect2/path1/path2 BODY ")                         // replace base url
@@ -135,7 +211,7 @@ func TestVariousURL(t *testing.T) {
 	})
 }
 
-func TestMethods(t *testing.T) {
+func TestUnitMethods(t *testing.T) {
 	methods := [4]string{"GET", "DELETE", "POST", "PUT"}
 	expected := [4]string{
 		"Method GET URL /test1/testbody BODY SomeBodyText",
@@ -214,7 +290,7 @@ func TestSingleClientManyRequests(t *testing.T) {
 	//Shutdown()
 }
 */
-func TestWebsocket(t *testing.T) {
+func TestUnitWebsocket(t *testing.T) {
 	expected := "Backend Websocket Received : testing webserver"
 	go wsServer(t)
 	time.Sleep(0.5 * 1e9) // Time for server to start
@@ -257,7 +333,9 @@ func TestMain(m *testing.M) {
 	if err := singleSandbox.start(); err != nil {
 		panic(err)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	singleSandbox.teardown()
+	os.Exit(code)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -313,3 +391,62 @@ func wsServer(t *testing.T) {
 	}
 	log.Println("Out of server")
 }
+
+func TestUnitGetRouterFromConfigService(t *testing.T) {
+	t.Log("Testing: Retrieving router port from the config service, after router service startup")
+	expectedValue := "5002"
+	client := &http.Client{}
+	request, _ := http.NewRequest("GET", ConfigServiceUrl +"/config-service/variable/router_http_port", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Errorf("Error getting router_http_port from config service: %v", err)
+		return
+	}
+	defer response.Body.Close()
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		t.Errorf("Error reading response data")
+		return
+	}
+	if response.StatusCode != 200 {
+		t.Errorf("Error response from config service: StatusCode: %v, Body: %v", response.StatusCode, string(body[:]))
+		return
+	}
+	if string(body[:]) != expectedValue {
+		t.Errorf("Expected value in response to be %v, instead %v", expectedValue, string(body[:]))
+		return
+	}
+
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Integration Tests
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func TestIntegrationAddingPortToConfigService(t *testing.T) {
+	t.Log("Testing: Retrieving router port from the config service, after router service startup")
+	expectedValue := "5002"
+	client := &http.Client{}
+	request, _ := http.NewRequest("GET", "http://localhost:2010/config-service/variable/router_http_port", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Errorf("Error getting router_http_port from config service")
+		return
+	}
+	defer response.Body.Close()
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		t.Errorf("Error reading response data")
+		return
+	}
+	if response.StatusCode != 200 {
+		t.Errorf("Error response from config service: StatusCode: %v, Body: %v", response.StatusCode, string(body[:]))
+		return
+	}
+	if string(body[:]) != expectedValue {
+		t.Errorf("Expected value in response to be %v, instead %v", expectedValue, string(body[:]))
+		return
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
