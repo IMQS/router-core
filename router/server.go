@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-var ConfigServiceUrl = "http://localhost:2010"
+var ConfigServiceUrl string
 
 // Router Server
 type Server struct {
@@ -479,9 +479,11 @@ func (s *Server) runHttpBridgeServers() error {
 }
 
 func (s *Server) addPortToConfigService() error {
-	client := &http.Client{}
-	request, _ := http.NewRequest("PUT", ConfigServiceUrl + "/config-service/variable", strings.NewReader(fmt.Sprintf("{\"key\": \"%v\", \"value\": \"%v\"}", "router_http_port", s.configHttp.Port)))
-	response, err := client.Do(request)
+	if len(ConfigServiceUrl) == 0 {
+		ConfigServiceUrl = "http://" + GetConfigServiceUrl()
+	}
+	req, err := http.NewRequest("PUT", ConfigServiceUrl+"/config-service/variable", strings.NewReader(fmt.Sprintf("{\"key\": \"%v\", \"value\": \"%v\"}", "router_http_port", s.configHttp.Port)))
+	response, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -490,7 +492,7 @@ func (s *Server) addPortToConfigService() error {
 	if err != nil {
 		return err
 	}
-	if response.StatusCode != 200 {
+	if response.StatusCode != http.StatusOK {
 		return errors.New(fmt.Sprintf("An error occurred adding port to config service system variables. Status Code: %v, Message: %v", response.StatusCode, string(body[:])))
 	}
 

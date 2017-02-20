@@ -204,3 +204,16 @@ func (c *Config) LoadString(json_config string) error {
 	}
 	return c.verify()
 }
+
+type ConfigServiceConfig struct {
+	Port            string
+}
+
+func GetConfigServiceUrl() string {
+	config := ConfigServiceConfig{}
+	err := serviceconfig.GetConfig("C:\\imqsbin\\static-conf\\config-service.json", "", 0, "", &config)
+	if err != nil {
+		fmt.Printf("Error reading config service url: %v", err)
+	}
+	return config.Port
+}

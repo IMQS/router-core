@@ -395,9 +395,7 @@ func wsServer(t *testing.T) {
 func TestUnitGetRouterFromConfigService(t *testing.T) {
 	t.Log("Testing: Retrieving router port from the config service, after router service startup")
 	expectedValue := "5002"
-	client := &http.Client{}
-	request, _ := http.NewRequest("GET", ConfigServiceUrl +"/config-service/variable/router_http_port", nil)
-	response, err := client.Do(request)
+	response, err := http.DefaultClient.Get(ConfigServiceUrl +"/config-service/variable/router_http_port")
 	if err != nil {
 		t.Errorf("Error getting router_http_port from config service: %v", err)
 		return
@@ -423,12 +421,10 @@ func TestUnitGetRouterFromConfigService(t *testing.T) {
 // Integration Tests
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func TestIntegrationAddingPortToConfigService(t *testing.T) {
+func TestIntegrationRetrieveRouterPortFromConfigServiceAfterRouterStartup(t *testing.T) {
 	t.Log("Testing: Retrieving router port from the config service, after router service startup")
 	expectedValue := "5002"
-	client := &http.Client{}
-	request, _ := http.NewRequest("GET", "http://localhost:2010/config-service/variable/router_http_port", nil)
-	response, err := client.Do(request)
+	response, err := http.DefaultClient.Get("http://localhost:2010/config-service/variable/router_http_port")
 	if err != nil {
 		t.Errorf("Error getting router_http_port from config service")
 		return
@@ -439,7 +435,7 @@ func TestIntegrationAddingPortToConfigService(t *testing.T) {
 		t.Errorf("Error reading response data")
 		return
 	}
-	if response.StatusCode != 200 {
+	if response.StatusCode != http.StatusOK {
 		t.Errorf("Error response from config service: StatusCode: %v, Body: %v", response.StatusCode, string(body[:]))
 		return
 	}
