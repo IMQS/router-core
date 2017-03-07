@@ -33,8 +33,9 @@ type pureHubAuthResponse struct {
 
 // Parameters to set when logging into YF
 type yellowfinLoginParameters struct {
-	ModuleFilter   string
-	ScenarioFilter string
+	ModuleFilter   string              `json:"module_filter"`
+	ScenarioFilter string              `json:"scenario_filter"`
+	GlobalFilters  map[string][]string `json:"global_filters"`
 }
 
 // This is stored in the 'value' part of targetPassThroughAuth.tokenMap
