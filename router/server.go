@@ -6,11 +6,13 @@ import (
 	"github.com/IMQS/serviceauth"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
+	"errors"
 	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
 	"github.com/IMQS/httpbridge/go/src/httpbridge"
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
+	"io/ioutil"
 	golog "log"
 	"net"
 	"net/http"
@@ -21,6 +23,8 @@ import (
 	"strings"
 	"time"
 )
+
+var ConfigServiceUrl string
 
 // Router Server
 type Server struct {
@@ -73,6 +77,15 @@ func NewServer(config *Config) (*Server, error) {
 	}
 	s.httpTransport.Proxy = func(req *ms_http.Request) (*url.URL, error) {
 		return s.translator.getProxy(s.errorLog, req.URL.Host)
+	}
+
+	// Add router port to the config service. This step is important, as all other services will depend on this
+	// port. It doesn't make sense to let the config service default the port for router to 80, because if the router
+	// is not running on 80, they will all fail anyway. Better to fail fast
+	err = s.addPortToConfigService()
+	if err != nil {
+		s.errorLog.Errorf("Error adding port to config service")
+		return nil, err
 	}
 
 	s.errorLog.Info("Router starting with:")
@@ -463,6 +476,27 @@ func (s *Server) runHttpBridgeServers() error {
 		}
 	}
 	return firstErr
+}
+
+func (s *Server) addPortToConfigService() error {
+	if len(ConfigServiceUrl) == 0 {
+		ConfigServiceUrl = "http://" + GetConfigServiceUrl()
+	}
+	req, err := http.NewRequest("PUT", ConfigServiceUrl+"/config-service/variable", strings.NewReader(fmt.Sprintf("{\"key\": \"%v\", \"value\": \"%v\"}", "router_http_port", s.configHttp.Port)))
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode != http.StatusOK {
+		return errors.New(fmt.Sprintf("An error occurred adding port to config service system variables. Status Code: %v, Message: %v", response.StatusCode, string(body[:])))
+	}
+
+	return nil
 }
 
 func (s *Server) Pong(w http.ResponseWriter, req *http.Request) {

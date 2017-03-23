@@ -31,7 +31,7 @@ func verifyRoute(t *testing.T, rs *routeSet, inUrl string, expectOutUrl string) 
 	}
 }
 
-func TestRouteMatching(t *testing.T) {
+func TestUnitRouteMatching(t *testing.T) {
 	// Various tests, including giving priority to longer matches
 	rs := routeSetFromConfig(t, `
 		{"Routes": {
