@@ -180,6 +180,7 @@ func (s *Server) autoRestartAfterError(err error) bool {
 // Detect illegal requests
 func (s *Server) isLegalRequest(req *http.Request) bool {
 	// We were getting a whole lot of requests to the 'telco' server where the hostname was "yahoo.mail.com".
+	// TODO: move this to blacklist config file
 	if req.URL.Host == "yahoo.mail.com" {
 		s.errorLog.Errorf("Illegal hostname (%s) - closing connection", req.URL.Host)
 		return false
@@ -229,8 +230,18 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 	}
 
 	// This redirects all HTTP request to use HTTPS for all connections which originate from a domain name.
-	if s.configHttp.RedirectHTTP && !isSecure && req.Proto == "HTTP/1.1" && net.ParseIP(req.Host) == nil && req.Host != "localhost" {
-		http.Redirect(w, req, "https://"+req.Host+req.URL.String(), http.StatusMovedPermanently)
+	// We don't redirect IP-address or localhost URLs
+	if s.configHttp.RedirectHTTP && !isSecure && net.ParseIP(req.Host) == nil && req.Host != "localhost" {
+		host := strings.Split(req.Host, ":")[0] // remove port from host, this is safe even when no port is specified
+		target := fmt.Sprintf("https://%s%s", host, req.URL.Path)
+		if s.configHttp.HTTPSPort != 0 {
+			target = fmt.Sprintf("https://%s:%d%s", host, s.configHttp.HTTPSPort, req.URL.Path) // override default HTTPS port
+		}
+		if len(req.URL.RawQuery) > 0 {
+			target += "?" + req.URL.RawQuery
+		}
+		w.Header().Set("cache-control", "no-store")
+		http.Redirect(w, req, target, http.StatusMovedPermanently)
 		return
 	}
 

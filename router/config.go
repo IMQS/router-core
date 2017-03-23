@@ -3,9 +3,10 @@ package router
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/IMQS/serviceconfigsgo"
 	"net/url"
 	"strings"
+
+	"github.com/IMQS/serviceconfigsgo"
 )
 
 /*
@@ -150,6 +151,10 @@ func (c *Config) Reset() {
 
 // Return nil if the configuration passes sanity and integrity checks
 func (c *Config) verify() error {
+	if c.HTTP.Port != 0 && c.HTTP.Port == c.HTTP.HTTPSPort {
+		return fmt.Errorf("Can't serve HTTP and HTTPS on a single port (%v)", c.HTTP.Port)
+	}
+
 	for match, replace := range c.Routes {
 		if len(match) == 0 || match[0] != '/' {
 			return fmt.Errorf("Match must start with '/' (%v -> %v)", match, replace)
