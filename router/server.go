@@ -187,21 +187,22 @@ func (s *Server) isLegalRequest(req *http.Request) bool {
 	return true
 }
 
-func (s *Server) resendBucky(orgReq *http.Request) {
-	buf, _ := ioutil.ReadAll(orgReq.Body)
-	newBody := ioutil.NopCloser(bytes.NewBuffer(buf))
-	orgBody := ioutil.NopCloser(bytes.NewBuffer(buf))
-
-	req, err := http.NewRequest("POST", "http://monitor.imqs.co.za/bucky/v1/send", newBody)
-	orgReq.Body = orgBody
+func (s *Server) resendBucky(w http.ResponseWriter, orgReq *http.Request) {
+	buf, err := ioutil.ReadAll(orgReq.Body)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "")
 
 	go func() {
+		newBody := ioutil.NopCloser(bytes.NewBuffer(buf))
+		req, err := http.NewRequest("POST", "http://monitor.imqs.co.za/bucky/v1/send", newBody)
 		if err != nil { // err
 			return
 		}
+
 		req.Header.Add("Content-Type", "text/plain")
 		req.Close = true
-
 		http.DefaultClient.Do(req)
 	}()
 }
@@ -239,8 +240,7 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 	}
 
 	if req.RequestURI == "/bucky/v1/send" {
-		s.resendBucky(req)
-		fmt.Fprintf(w, "")
+		s.resendBucky(w, req)
 		return
 	}
 
