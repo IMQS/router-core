@@ -2,14 +2,11 @@ package router
 
 import (
 	"fmt"
+
 	"github.com/IMQS/log"
 	"github.com/IMQS/serviceauth"
 	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
-	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
-	"github.com/IMQS/httpbridge/go/src/httpbridge"
-	"golang.org/x/net/websocket"
-	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
 	golog "log"
 	"net"
@@ -20,6 +17,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"bytes"
+	"io/ioutil"
+
+	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
+	"github.com/IMQS/httpbridge/go/src/httpbridge"
+	"golang.org/x/net/websocket"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // Router Server
@@ -182,6 +187,25 @@ func (s *Server) isLegalRequest(req *http.Request) bool {
 	return true
 }
 
+func (s *Server) resendBucky(orgReq *http.Request) {
+	buf, _ := ioutil.ReadAll(orgReq.Body)
+	newBody := ioutil.NopCloser(bytes.NewBuffer(buf))
+	orgBody := ioutil.NopCloser(bytes.NewBuffer(buf))
+
+	req, err := http.NewRequest("POST", "http://monitor.imqs.co.za/bucky/v1/send", newBody)
+	orgReq.Body = orgBody
+
+	go func() {
+		if err != nil { // err
+			return
+		}
+		req.Header.Add("Content-Type", "text/plain")
+		req.Close = true
+
+		http.DefaultClient.Do(req)
+	}()
+}
+
 /*
 ServeHTTP is the single router access point to the frontdoor server. All request are handled in this method.
  It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
@@ -211,6 +235,12 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 	// Catch ping requests
 	if req.RequestURI == "/router/ping" {
 		s.Pong(w, req)
+		return
+	}
+
+	if req.RequestURI == "/bucky/v1/send" {
+		s.resendBucky(req)
+		fmt.Fprintf(w, "")
 		return
 	}
 
