@@ -190,9 +190,9 @@ func (s *Server) isLegalRequest(req *http.Request) bool {
 func (s *Server) resendBucky(w http.ResponseWriter, orgReq *http.Request) {
 	buf, err := ioutil.ReadAll(orgReq.Body)
 	if err != nil {
+		http.Error(w, "Error reading request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	fmt.Fprintf(w, "")
 
 	go func() {
 		newBody := ioutil.NopCloser(bytes.NewBuffer(buf))
