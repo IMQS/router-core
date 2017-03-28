@@ -197,7 +197,8 @@ func (s *Server) resendBucky(w http.ResponseWriter, orgReq *http.Request) {
 	go func() {
 		newBody := ioutil.NopCloser(bytes.NewBuffer(buf))
 		req, err := http.NewRequest("POST", "http://monitor.imqs.co.za/bucky/v1/send", newBody)
-		if err != nil { // err
+		if err != nil {
+			s.errorLog.Errorf("Error with NewRequest: %v\n", err)
 			return
 		}
 
