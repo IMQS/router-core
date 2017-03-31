@@ -400,29 +400,28 @@ func (s *Server) forwardHttpBridge(isSecure bool, w http.ResponseWriter, req *ht
 	// httpbridge only receives "/hello/foo". If we want to transmit the other information,
 	// then we'll add that information to headers, or to the flatbuffer.
 
+	// If you need to build a "X-Forward-For" header, then you can form it by doing: cleaned_prefix + req.RequestURI
+	//  	cleaned_prefix := ""
+	//  	if isSecure {
+	//  		cleaned_prefix = "https://"
+	//  	} else {
+	//  		cleaned_prefix = "http://"
+	//  	}
+	//  	cleaned_prefix += req.Host
+
 	//fmt.Printf("newurl: %v\n", newurl)
 	parsed, _ := url.Parse(newurl)
 	port, _ := strconv.Atoi(parsed.Host)
-	cleaned_prefix := ""
-	if isSecure {
-		cleaned_prefix = "https://"
-	} else {
-		cleaned_prefix = "http://"
-	}
-	cleaned_prefix += req.Host
 	cleaned_uri := parsed.Path
 	if len(parsed.RawQuery) != 0 {
 		cleaned_uri += "?" + parsed.RawQuery
 	}
-	//fmt.Printf("cleaned_prefix = %v, cleaned_uri = %v\n", cleaned_prefix, cleaned_uri)
-	cleaned, err := http.NewRequest(req.Method, cleaned_prefix+cleaned_uri, req.Body)
-	cleaned.RequestURI = cleaned_uri
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	copyHeaders(req.Header, cleaned.Header)
-	s.httpBridgeServers[port].ServeHTTP(w, cleaned)
+	//fmt.Printf("org path = %v, cleaned_prefix = %v, cleaned_uri = %v, port = %v\n", req.RequestURI, cleaned_prefix, cleaned_uri, port)
+
+	// httpbridge doesn't care about req.URL - it only looks at RequestURI
+	req.RequestURI = cleaned_uri
+
+	s.httpBridgeServers[port].ServeHTTP(w, req)
 }
 
 // Returns true if the request should continue to be passed through the router
