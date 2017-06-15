@@ -429,6 +429,17 @@ func (s *Server) forwardHttpBridge(isSecure bool, w http.ResponseWriter, req *ht
 	}
 	//fmt.Printf("org path = %v, cleaned_prefix = %v, cleaned_uri = %v, port = %v\n", req.RequestURI, cleaned_prefix, cleaned_uri, port)
 
+	// I originally thought that RawPath was the right thing to use here, but it turns out that url.Parse/url.ParseRequestURI will only set
+	// RawPath if EscapedPath() is different from RawPath. This header was originally added for our request signing system, so that
+	// the receiver can get access to the original URL string, the way the sender composed it. It looks like the best way to do that
+	// is to parse the RequestURI ourselves, by looking for the ? and just using everything before that.
+	rawPath := req.RequestURI
+	if question := strings.IndexRune(req.RequestURI, '?'); question != -1 {
+		rawPath = req.RequestURI[:question]
+	}
+	//fmt.Printf("%v\n", rawPath)
+	req.Header.Add("X-Original-Path", rawPath)
+
 	// httpbridge doesn't care about req.URL - it only looks at RequestURI
 	req.RequestURI = cleaned_uri
 
