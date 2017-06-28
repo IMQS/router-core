@@ -229,20 +229,33 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	// This redirects all HTTP request to use HTTPS for all connections which originate from a domain name.
-	// We don't redirect IP-address or localhost URLs
+	// Redirect HTTP requests to HTTPS
+	// Requests from IP addressses and localhost are left untouched
 	if s.configHttp.RedirectHTTP && !isSecure && net.ParseIP(req.Host) == nil && req.Host != "localhost" {
-		host := strings.Split(req.Host, ":")[0] // remove port from host, this is safe even when no port is specified
-		target := fmt.Sprintf("https://%s%s", host, req.URL.Path)
-		if s.configHttp.HTTPSPort != 0 {
-			target = fmt.Sprintf("https://%s:%d%s", host, s.configHttp.HTTPSPort, req.URL.Path) // override default HTTPS port
+
+		// Give 404 for appcache manifest request when HTTP redirection is enabled, this clears out old manifest
+		if req.RequestURI == "/manifest.appcache" {
+			http.Error(w, "", http.StatusNotFound)
+			s.errorLog.Info("Appcache manifest cleared")
+			return
 		}
-		if len(req.URL.RawQuery) > 0 {
-			target += "?" + req.URL.RawQuery
+
+		// Only request to the root of the domain will get redirected, all other requests remain untouched, for instance
+		// http://demo.imqs.co.za will get redirected, but http://demo.imqs.co.za/index.html won't
+		if req.RequestURI == "/" || req.RequestURI == "" {
+			host := strings.Split(req.Host, ":")[0] // remove port from host, this is safe even when no port is specified
+			target := fmt.Sprintf("https://%s%s", host, req.URL.Path)
+			if s.configHttp.HTTPSPort != 0 {
+				target = fmt.Sprintf("https://%s:%d%s", host, s.configHttp.HTTPSPort, req.URL.Path) // override default HTTPS port
+			}
+			if len(req.URL.RawQuery) > 0 {
+				target += "?" + req.URL.RawQuery
+			}
+			w.Header().Set("cache-control", "no-store")
+			s.errorLog.Infof("Redirecting request from %s to %s \n", req.URL.String(), target)
+			http.Redirect(w, req, target, http.StatusMovedPermanently)
+			return
 		}
-		w.Header().Set("cache-control", "no-store")
-		http.Redirect(w, req, target, http.StatusMovedPermanently)
-		return
 	}
 
 	// Catch ping requests
