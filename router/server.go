@@ -23,6 +23,7 @@ import (
 
 	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
 	"github.com/IMQS/httpbridge/go/src/httpbridge"
+	"github.com/IMQS/serviceconfigsgo"
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -80,12 +81,23 @@ func NewServer(config *Config) (*Server, error) {
 		return s.translator.getProxy(s.errorLog, req.URL.Host)
 	}
 
+	if err := serviceconfig.AddSystemVariableToConfigService("router_http_port", getRouterPort(s.configHttp.Port)); err != nil {
+		return nil, err
+	}
+
 	s.errorLog.Info("Router starting with:")
 	s.errorLog.Infof(" DisableKeepAlives: %v", config.HTTP.DisableKeepAlive)
 	s.errorLog.Infof(" MaxIdleConnsPerHost: %v", config.HTTP.MaxIdleConnections)
 	s.errorLog.Infof(" ResponseHeaderTimeout: %v", config.HTTP.ResponseHeaderTimeout)
 	s.wsdlMatch = regexp.MustCompile(`([^/]\w+)\.(wsdl)$`)
 	return s, nil
+}
+
+func getRouterPort(port uint16) string {
+	if port == 0 {
+		return "80"
+	}
+	return strconv.FormatUint(uint64(port), 10)
 }
 
 // Run the server.
