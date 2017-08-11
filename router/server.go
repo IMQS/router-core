@@ -1,13 +1,11 @@
 package router
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
-
-	"github.com/IMQS/log"
-	"github.com/IMQS/serviceauth"
-	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
-	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
 	"io"
+	"io/ioutil"
 	golog "log"
 	"net"
 	"net/http"
@@ -18,12 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"bytes"
-	"io/ioutil"
-
 	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
+	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
 	"github.com/IMQS/httpbridge/go/src/httpbridge"
+	"github.com/IMQS/log"
+	"github.com/IMQS/serviceauth"
 	"github.com/IMQS/serviceconfigsgo"
+	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"golang.org/x/net/websocket"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -317,9 +316,9 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 }
 
 /*
-forwardHTTP connects to all http scheme backends and copies bidirectionaly between the incoming
+forwardHTTP connects to all http scheme backends and copies bidirectionally between the incoming
 connections and the backend connections. It also copies required HTTP headers between the connections making the
-router "middle man" invisible to incomming connections.
+router "middle man" invisible to incoming connections.
 The body part of both requests and responses are implemented as Readers, thus allowing the body contents
 to be copied directly down the sockets, negating the requirement to have a buffer here. This allows all
 http bodies, i.e. chunked, to pass through.
@@ -342,9 +341,10 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 		return
 	}
 
-	srcHost := req.Host
-	dstHost := cleaned.Host
+	srcHost := req.Host     // Client address.
+	dstHost := cleaned.Host // Destination address, e.g. 127.0.0.1:5984.
 
+	// Copy headers from client req into cleaned req, replacing Location header value if found.
 	copyheadersIn(srcHost, req.Header, dstHost, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
@@ -355,12 +355,42 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
+
+	var responseWriter io.Writer = w
+	if resp.Body != nil {
+
+		// Only compress when it hasn't been already and the client supports it.
+		if resp.Header.Get("Content-Encoding") == "" && strings.Contains(req.Header.Get("Accept-Encoding"), "gzip") {
+
+			// Only compress when content type is known and whitelisted.
+			if _, allowed := s.configHttp.AutomaticGzip.whitelistMap[resp.Header.Get("Content-Type")]; allowed {
+				// If we compress a response that is not chunked, then the original content length header is invalid.
+				// We also do not know what the final length of the compressed content will be,
+				// unless we zip to a buffer first and then write that to the response.
+				// But we want to avoid a buffer for performance reasons.
+				// It seems either the Go runtime or browser calculates and inserts the header automatically
+				// at some point, so we just delete it here.
+				resp.Header.Del("Content-Length")
+
+				zipper := gzip.NewWriter(w)
+				defer zipper.Close()
+				responseWriter = zipper
+
+				if resp.Header.Get("Vary") == "" {
+					resp.Header.Add("Vary", "Accept-Encoding")
+				}
+				resp.Header.Set("Content-Encoding", "gzip")
+			}
+		}
+	}
+
+	// Copy headers from response into w, replacing Location header value back to original if found.
 	copyheadersOut(dstHost, resp.Header, srcHost, w.Header(), req.TLS != nil)
 	w.WriteHeader(resp.StatusCode)
 
 	if resp.Body != nil {
 		defer resp.Body.Close()
-		io.Copy(w, resp.Body)
+		io.Copy(responseWriter, resp.Body)
 	}
 }
 
