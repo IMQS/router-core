@@ -114,8 +114,7 @@ type ConfigHTTP struct {
 }
 
 type automaticGzip struct {
-	Enabled   bool     `json:"enabled"`
-	Whitelist []string `json:"whitelist"`
+	Whitelist []string
 
 	whitelistMap map[string]struct{}
 }
