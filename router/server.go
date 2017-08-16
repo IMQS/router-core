@@ -362,8 +362,18 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 		// Only compress when it hasn't been already and the client supports it.
 		if resp.Header.Get("Content-Encoding") == "" && strings.Contains(req.Header.Get("Accept-Encoding"), "gzip") {
 
+			// Remove any possible metadata in the header value, e.g. "text/html; charset=utf-8" becomes "text/html".
+			responseContentType := resp.Header.Get("Content-Type")
+			var trimmedContentType string
+			sepIdx := strings.Index(responseContentType, ";")
+			if sepIdx > 0 {
+				trimmedContentType = responseContentType[:sepIdx]
+			} else {
+				trimmedContentType = responseContentType
+			}
+
 			// Only compress when content type is known and whitelisted.
-			if _, allowed := s.configHttp.AutomaticGzip.whitelistMap[resp.Header.Get("Content-Type")]; allowed {
+			if _, allowed := s.configHttp.AutomaticGzip.whitelistMap[trimmedContentType]; allowed {
 				// If we compress a response that is not chunked, then the original content length header is invalid.
 				// We also do not know what the final length of the compressed content will be,
 				// unless we zip to a buffer first and then write that to the response.

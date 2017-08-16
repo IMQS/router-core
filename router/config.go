@@ -110,7 +110,7 @@ type ConfigHTTP struct {
 	MaxIdleConnections    int
 	ResponseHeaderTimeout int
 	RedirectHTTP          bool
-	AutomaticGzip         automaticGzip `json:"AutomaticGzip"`
+	AutomaticGzip         automaticGzip
 }
 
 type automaticGzip struct {
