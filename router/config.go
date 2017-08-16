@@ -110,6 +110,13 @@ type ConfigHTTP struct {
 	MaxIdleConnections    int
 	ResponseHeaderTimeout int
 	RedirectHTTP          bool
+	AutomaticGzip         automaticGzip
+}
+
+type automaticGzip struct {
+	Whitelist []string
+
+	whitelistMap map[string]struct{}
 }
 
 type ConfigPassThroughAuth struct {
@@ -199,6 +206,7 @@ func (c *Config) LoadFile(filename string) error {
 	if err != nil {
 		return err
 	}
+	c.populateGzipWhitelist()
 	return c.verify()
 }
 
@@ -207,5 +215,14 @@ func (c *Config) LoadString(json_config string) error {
 	if err := json.Unmarshal([]byte(json_config), c); err != nil {
 		return err
 	}
+	c.populateGzipWhitelist()
 	return c.verify()
+}
+
+// Convert whitelist from slice to map for easy/fast search.
+func (c *Config) populateGzipWhitelist() {
+	c.HTTP.AutomaticGzip.whitelistMap = make(map[string]struct{}, len(c.HTTP.AutomaticGzip.Whitelist))
+	for _, contentType := range c.HTTP.AutomaticGzip.Whitelist {
+		c.HTTP.AutomaticGzip.whitelistMap[contentType] = struct{}{}
+	}
 }
