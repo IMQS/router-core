@@ -348,6 +348,7 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 	copyheadersIn(srcHost, req.Header, dstHost, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
+	cleaned.Header.Set("X-Forwarded-For", req.RemoteAddr)
 
 	resp, err := s.httpTransport.RoundTrip(cleaned)
 	if err != nil {
