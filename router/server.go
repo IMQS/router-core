@@ -1,7 +1,6 @@
 package router
 
 import (
-	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -37,6 +36,7 @@ type Server struct {
 	errorLog          *log.Logger
 	wsdlMatch         *regexp.Regexp             // hack for serving static content
 	httpBridgeServers map[int]*httpbridge.Server // Keys of the map are httpbridge backend port numbers
+	udpConnPool       *UDPConnectionPool
 }
 
 type frontServer struct {
@@ -54,6 +54,7 @@ func NewServer(config *Config) (*Server, error) {
 	s := &Server{}
 	s.configHttp = config.HTTP
 	s.httpBridgeServers = map[int]*httpbridge.Server{}
+	s.udpConnPool = NewUDPConnectionPool()
 
 	s.debugRoutes = config.DebugRoutes
 	s.accessLogFile = config.AccessLog
@@ -199,27 +200,6 @@ func (s *Server) isLegalRequest(req *http.Request) bool {
 	return true
 }
 
-func (s *Server) resendBucky(w http.ResponseWriter, orgReq *http.Request) {
-	buf, err := ioutil.ReadAll(orgReq.Body)
-	if err != nil {
-		http.Error(w, "Error reading request body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	go func() {
-		newBody := ioutil.NopCloser(bytes.NewBuffer(buf))
-		req, err := http.NewRequest("POST", "http://monitor.imqs.co.za/bucky/v1/send", newBody)
-		if err != nil {
-			s.errorLog.Errorf("Error with NewRequest: %v\n", err)
-			return
-		}
-
-		req.Header.Add("Content-Type", "text/plain")
-		req.Close = true
-		http.DefaultClient.Do(req)
-	}()
-}
-
 /*
 ServeHTTP is the single router access point to the frontdoor server. All request are handled in this method.
  It uses Routes to generate the new url and then switches on scheme type to connect to the backend copying
@@ -275,11 +255,6 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	if req.RequestURI == "/bucky/v1/send" {
-		s.resendBucky(w, req)
-		return
-	}
-
 	newurl, requirePermission, passThroughAuth := s.translator.processRoute(req.URL)
 
 	if s.debugRoutes {
@@ -309,6 +284,8 @@ func (s *Server) ServeHTTP(isSecure bool, w http.ResponseWriter, req *http.Reque
 		s.forwardHttpBridge(isSecure, w, req, newurl)
 	case scheme_ws:
 		s.forwardWebsocket(w, req, newurl)
+	case scheme_udp:
+		s.forwardUDP(w, req, newurl)
 	default:
 		s.errorLog.Errorf("Unrecognized scheme (%v) -> (%v)", req.RequestURI, newurl)
 		http.Error(w, "Unrecognized forwarding URL", http.StatusInternalServerError)
@@ -455,6 +432,29 @@ func (s *Server) forwardWebsocket(w http.ResponseWriter, req *http.Request, newu
 	wsServer := &websocket.Server{}
 	wsServer.Handler = myHandler
 	wsServer.ServeHTTP(w, req)
+}
+
+/*
+forwardUDP does for UDP what forwardHTTP does for http requests. UDP is connectionless, so implementation is very simple
+*/
+func (s *Server) forwardUDP(w http.ResponseWriter, req *http.Request, newurl string) {
+	u, err := url.Parse(newurl)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	dstHost := u.Host // Destination address, e.g. 127.0.0.1:5984.
+	msg, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = s.udpConnPool.Send(dstHost, msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *Server) forwardHttpBridge(isSecure bool, w http.ResponseWriter, req *http.Request, newurl string) {
