@@ -2,7 +2,6 @@ package router
 
 import (
 	"fmt"
-	"github.com/IMQS/log"
 	"net/url"
 	"regexp"
 	"sort"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/IMQS/log"
 )
 
 type scheme string
@@ -20,6 +21,7 @@ const (
 	scheme_http              = "http"
 	scheme_https             = "https"
 	scheme_httpbridge        = "httpbridge"
+	scheme_udp               = "udp"
 )
 
 // A target URL
@@ -71,6 +73,8 @@ func parse_scheme(targetUrl string) scheme {
 	switch {
 	case targetUrl[0:3] == "ws:":
 		return scheme_ws
+	case targetUrl[0:4] == "udp:":
+		return scheme_udp
 	case targetUrl[0:5] == "http:":
 		return scheme_http
 	case targetUrl[0:6] == "https:":
