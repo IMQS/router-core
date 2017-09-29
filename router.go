@@ -24,13 +24,15 @@ func realMain() (result int) {
 	flags := flag.NewFlagSet("router", flag.ExitOnError)
 	configFile := flags.String("config", "", "Optional config file for testing")
 	showHttpPort := flags.Bool("show-http-port", false, "print the http port to stdout and exit")
+	cMode := flags.Bool("container", false, "Run in container mode. Optional. (default false)")
 
 	if len(os.Args) > 1 {
 		flags.Parse(os.Args[1:])
 	}
 
 	config := &router.Config{}
-	err := config.LoadFile(*configFile)
+
+	err := config.LoadFile(*configFile, *cMode)
 	if err != nil {
 		panic(fmt.Errorf("Error loading '%s': %v", *configFile, err))
 	}

@@ -3,6 +3,7 @@ package router
 import (
 	"compress/gzip"
 	"fmt"
+	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
 	"io"
 	"io/ioutil"
 	golog "log"
@@ -14,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
 	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
 	"github.com/IMQS/httpbridge/go/src/httpbridge"
 	"github.com/IMQS/log"
@@ -81,7 +80,7 @@ func NewServer(config *Config) (*Server, error) {
 		return s.translator.getProxy(s.errorLog, req.URL.Host)
 	}
 
-	if err := serviceconfig.AddSystemVariableToConfigService("router_http_port", getRouterPort(s.configHttp.Port)); err != nil {
+	if err := serviceconfig.AddSystemVariableToConfigService("router_http_port", getRouterPort(s.configHttp.Port), containerMode); err != nil {
 		return nil, err
 	}
 
@@ -524,7 +523,7 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 		return nil, true
 	}
 
-	if httpCode, errorMsg, authData := serviceauth.VerifyUserHasPermission(req, requirePermission); httpCode == http.StatusOK {
+	if httpCode, errorMsg, authData := serviceauth.VerifyUserHasPermission(req, requirePermission, containerMode); httpCode == http.StatusOK {
 		return authData, true
 	} else { // Not OK
 		if httpCode == http.StatusUnauthorized {
