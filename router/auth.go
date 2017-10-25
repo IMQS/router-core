@@ -116,14 +116,6 @@ func authInjectECS(log *log.Logger, w http.ResponseWriter, req *http.Request, ta
 	return true
 }
 
-func getAuthUrl() string {
-	if containerMode {
-		return serviceauth.Imqsauth_url_container
-	} else {
-		return serviceauth.Imqsauth_url
-	}
-}
-
 func authInjectSitePro(log *log.Logger, w http.ResponseWriter, req *http.Request, target *targetPassThroughAuth) bool {
 	req.SetBasicAuth(target.config.Username, target.config.Password)
 	return true
@@ -277,7 +269,7 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 	// before forwarding the logout call to the Auth system.
 	// This is required to gracefully logout YF with IMQS.
 	case "/yellowfin/logout":
-		logoutReq, err := http.NewRequest("POST", getAuthUrl()+"/logout", nil)
+		logoutReq, err := http.NewRequest("POST", serviceauth.getAuthUrl()+"/logout", nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
@@ -397,7 +389,7 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 		http.Error(w, "Error loggin in to yellowfin", http.StatusInternalServerError)
 		return nil
 	}
-	authReq, err := ms_http.NewRequest("POST", getAuthUrl()+"/login_yellowfin", bytes.NewBuffer(paramsBytes))
+	authReq, err := ms_http.NewRequest("POST", serviceauth.getAuthUrl()+"/login_yellowfin", bytes.NewBuffer(paramsBytes))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil

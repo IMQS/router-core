@@ -133,8 +133,6 @@ type ConfigTarget struct {
 	PassThroughAuth   ConfigPassThroughAuth
 }
 
-var containerMode bool = false
-
 // {FOO}/bar -> ( FOO, /bar)
 func split_named_target(targetURL string) (string, string) {
 	open := strings.Index(targetURL, "{")
@@ -202,10 +200,9 @@ func (c *Config) verify() error {
 	return nil
 }
 
-func (c *Config) LoadFile(filename string, cMode bool) error {
-	containerMode = cMode
+func (c *Config) LoadFile(filename string) error {
 	c.Reset()
-	err := serviceconfig.GetConfig(filename, serviceName, serviceConfigVersion, serviceConfigFileName, c, containerMode)
+	err := serviceconfig.GetConfig(filename, serviceName, serviceConfigVersion, serviceConfigFileName, c)
 	if err != nil {
 		return err
 	}
