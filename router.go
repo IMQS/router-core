@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/IMQS/router-core/router"
 	"os"
+
+	"github.com/IMQS/gowinsvc/service"
+	"github.com/IMQS/router-core/router"
 )
 
 func main() {
@@ -55,7 +57,7 @@ func realMain() (result int) {
 		handler()
 	}
 	success := true
-	if !router.RunAsService(handlerNoRet) {
+	if !service.RunAsService(handlerNoRet) {
 		// Run in the foreground
 		success = false
 		fmt.Print(handler())

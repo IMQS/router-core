@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/IMQS/log"
-	"github.com/IMQS/serviceauth"
-	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/IMQS/log"
+	"github.com/IMQS/serviceauth"
+	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 )
 
 /*
@@ -269,7 +270,7 @@ func authInjectYellowfin(log *log.Logger, w http.ResponseWriter, req *http.Reque
 	// before forwarding the logout call to the Auth system.
 	// This is required to gracefully logout YF with IMQS.
 	case "/yellowfin/logout":
-		logoutReq, err := http.NewRequest("POST", serviceauth.getAuthUrl()+"/logout", nil)
+		logoutReq, err := http.NewRequest("POST", serviceauth.GetAuthURL()+"/logout", nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
@@ -389,7 +390,7 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 		http.Error(w, "Error loggin in to yellowfin", http.StatusInternalServerError)
 		return nil
 	}
-	authReq, err := ms_http.NewRequest("POST", serviceauth.getAuthUrl()+"/login_yellowfin", bytes.NewBuffer(paramsBytes))
+	authReq, err := ms_http.NewRequest("POST", serviceauth.GetAuthURL()+"/login_yellowfin", bytes.NewBuffer(paramsBytes))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil
