@@ -414,8 +414,10 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 	defer authResp.Body.Close()
 
 	if authResp.StatusCode != http.StatusOK {
-		log.Errorf("Error logging in to yellowfin (HTTP code: %v)", authResp.Status)
-		http.Error(w, authResp.Status, authResp.StatusCode)
+		respBody, _ := ioutil.ReadAll(authResp.Body)
+		errMsg := string(respBody)
+		log.Error(errMsg)
+		http.Error(w, errMsg, authResp.StatusCode)
 		return nil
 	}
 
