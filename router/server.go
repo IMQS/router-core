@@ -484,14 +484,22 @@ func (s *Server) forwardHttpBridge(isSecure bool, w http.ResponseWriter, req *ht
 	//  	}
 	//  	cleaned_prefix += req.Host
 
-	//fmt.Printf("newurl: %v\n", newurl)
+	// fmt.Printf("newurl: %v\n", newurl)
 	parsed, _ := url.Parse(newurl)
 	port, _ := strconv.Atoi(parsed.Host)
-	cleaned_uri := parsed.Path
+
+	// In order to build the correct cleaned_uri, we need to escape the parsed.Path string without the "/".
+	splitted_cleaned_uri := strings.Split(parsed.Path, "/")
+	for i := 0; i < len(splitted_cleaned_uri); i++ {
+		splitted_cleaned_uri[i] = url.PathEscape(splitted_cleaned_uri[i])
+	}
+	cleaned_uri := strings.Join(splitted_cleaned_uri, "/")
+
 	if len(parsed.RawQuery) != 0 {
 		cleaned_uri += "?" + parsed.RawQuery
 	}
-	//fmt.Printf("org path = %v, cleaned_prefix = %v, cleaned_uri = %v, port = %v\n", req.RequestURI, cleaned_prefix, cleaned_uri, port)
+
+	// fmt.Printf("org path = %v, cleaned_uri = %v, port = %v\n", req.RequestURI, cleaned_uri, port)
 
 	// I originally thought that RawPath was the right thing to use here, but it turns out that url.Parse/url.ParseRequestURI will only set
 	// RawPath if EscapedPath() is different from RawPath. This header was originally added for our request signing system, so that
@@ -501,7 +509,7 @@ func (s *Server) forwardHttpBridge(isSecure bool, w http.ResponseWriter, req *ht
 	if question := strings.IndexRune(req.RequestURI, '?'); question != -1 {
 		rawPath = req.RequestURI[:question]
 	}
-	//fmt.Printf("%v\n", rawPath)
+	// fmt.Printf("%v\n", rawPath)
 	req.Header.Add("X-Original-Path", rawPath)
 
 	// httpbridge doesn't care about req.URL - it only looks at RequestURI
