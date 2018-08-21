@@ -116,6 +116,7 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	errors := make(chan error)
+	defer close(errors)
 
 	accessLog := openLog(s.accessLogFile, os.Stdout)
 
@@ -159,10 +160,9 @@ func (s *Server) ListenAndServe() error {
 	}()
 
 	// Wait for the first non-nil error and return it
-	for {
-		err := <-errors
+	for err := range errors {
 		if err != nil {
-			s.errorLog.Infof(`Router exiting. First non-nil error was "%v"`, err)
+			s.errorLog.Errorf(`Router exiting. First non-nil error was "%v"`, err)
 			return err
 		}
 	}
@@ -182,7 +182,7 @@ func pickLogfile(logfile string) string {
 // that happens. Instead, we just fire ourselves up again.
 func (s *Server) autoRestartAfterError(err error) bool {
 	if strings.Contains(err.Error(), "specified network name is no longer available") {
-		s.errorLog.Warnf("Automatically restarting after receiving error 64")
+		s.errorLog.Warn("Automatically restarting after receiving error 64")
 		return true
 	}
 	return false
@@ -549,8 +549,9 @@ func (s *Server) authorize(w http.ResponseWriter, req *http.Request, requirePerm
 // backend, since HttpBridge backends will constantly be trying to connect to us, and
 // probably emitting warnings to their logs if they are unable to connect.
 func (s *Server) runHttpBridgeServers() error {
-	done := make(chan error)
+	errPipe := make(chan error)
 	nwaiting := 0
+
 	for _, v := range s.translator.allRoutes() {
 		if v.scheme() != scheme_httpbridge {
 			continue
@@ -575,18 +576,18 @@ func (s *Server) runHttpBridgeServers() error {
 		s.httpBridgeServers[port] = hs
 		nwaiting++
 		go func() {
-			done <- hs.ListenAndServe()
+			errPipe <- hs.ListenAndServe()
 		}()
 	}
-	var firstErr error
+
 	for nwaiting != 0 {
-		err := <-done
-		nwaiting--
-		if err != nil && firstErr == nil {
-			firstErr = err
+		err := <-errPipe
+		if err != nil {
+			return err
 		}
+		nwaiting--
 	}
-	return firstErr
+	return nil
 }
 
 func (s *Server) Pong(w http.ResponseWriter, req *http.Request) {
