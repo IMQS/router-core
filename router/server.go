@@ -3,7 +3,6 @@ package router
 import (
 	"compress/gzip"
 	"fmt"
-	"github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
 	"io"
 	"io/ioutil"
 	golog "log"
@@ -16,18 +15,18 @@ import (
 	"strings"
 	"time"
 	// "github.com/cespare/hutil/apachelog" // Newer, but doesn't support websockets
+	apachelog "github.com/IMQS/go-apachelog" // Older, but supports websockets. Forked to include time zone in access logs.
 	"github.com/IMQS/httpbridge/go/src/httpbridge"
 	"github.com/IMQS/log"
 	"github.com/IMQS/serviceauth"
-	"github.com/IMQS/serviceconfigsgo"
-	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
+	serviceconfig "github.com/IMQS/serviceconfigsgo"
 	"golang.org/x/net/websocket"
-	"gopkg.in/natefinch/lumberjack.v2"
+	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
 // Router Server
 type Server struct {
-	httpTransport     *ms_http.Transport // For talking to backend services
+	httpTransport     *http.Transport // For talking to backend services
 	configHttp        ConfigHTTP
 	accessLogFile     string
 	debugRoutes       bool // If enabled, dumps every translated route to the error log
@@ -70,13 +69,13 @@ func NewServer(config *Config) (*Server, error) {
 		return nil, err
 	}
 
-	s.httpTransport = &ms_http.Transport{
+	s.httpTransport = &http.Transport{
 		DisableKeepAlives:     config.HTTP.DisableKeepAlive,
 		MaxIdleConnsPerHost:   config.HTTP.MaxIdleConnections,
 		DisableCompression:    true,
 		ResponseHeaderTimeout: time.Second * time.Duration(config.HTTP.ResponseHeaderTimeout),
 	}
-	s.httpTransport.Proxy = func(req *ms_http.Request) (*url.URL, error) {
+	s.httpTransport.Proxy = func(req *http.Request) (*url.URL, error) {
 		return s.translator.getProxy(s.errorLog, req.URL.Host)
 	}
 
@@ -311,7 +310,7 @@ the response was sent. This would then result in s.httpTransport.RoundTrip(clean
 an EOF error when it tried to re-use that TCP connection.
 */
 func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl string) {
-	cleaned, err := ms_http.NewRequest(req.Method, newurl, req.Body)
+	cleaned, err := http.NewRequest(req.Method, newurl, req.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -324,6 +323,8 @@ func (s *Server) forwardHttp(w http.ResponseWriter, req *http.Request, newurl st
 	copyheadersIn(srcHost, req.Header, dstHost, cleaned.Header)
 	cleaned.Proto = req.Proto
 	cleaned.ContentLength = req.ContentLength
+
+	s.addXOriginalPath(req, cleaned)
 
 	resp, err := s.httpTransport.RoundTrip(cleaned)
 	if err != nil {
@@ -501,21 +502,35 @@ func (s *Server) forwardHttpBridge(isSecure bool, w http.ResponseWriter, req *ht
 
 	// fmt.Printf("org path = %v, cleaned_uri = %v, port = %v\n", req.RequestURI, cleaned_uri, port)
 
-	// I originally thought that RawPath was the right thing to use here, but it turns out that url.Parse/url.ParseRequestURI will only set
-	// RawPath if EscapedPath() is different from RawPath. This header was originally added for our request signing system, so that
-	// the receiver can get access to the original URL string, the way the sender composed it. It looks like the best way to do that
-	// is to parse the RequestURI ourselves, by looking for the ? and just using everything before that.
-	rawPath := req.RequestURI
-	if question := strings.IndexRune(req.RequestURI, '?'); question != -1 {
-		rawPath = req.RequestURI[:question]
-	}
-	// fmt.Printf("%v\n", rawPath)
-	req.Header.Add("X-Original-Path", rawPath)
+	s.addXOriginalPath(req, req)
 
 	// httpbridge doesn't care about req.URL - it only looks at RequestURI
 	req.RequestURI = cleaned_uri
 
 	s.httpBridgeServers[port].ServeHTTP(w, req)
+}
+
+// addXOriginalPath adds a new HTTP header called X-Original-Path.
+// This is here so that the service can see the exact URL Path which the client used when making
+// the request to the router. If the client is signing the request, then she will use that
+// original URL Path to sign the request. When the receiving service wants to validate the
+// signature, it needs to know what Path to use when performing the validation. If the receiver
+// were to use the replaced path, then the validation would fail.
+// Example original Path: /crud/reload_schema
+// Example replaced Path: /reload_schema
+// In this example, we will set "X-Original-Path: /crud/reload_schema"
+// original and modified may be the same object
+func (s *Server) addXOriginalPath(original *http.Request, modified *http.Request) {
+	// I originally thought that RawPath was the right thing to use here, but it turns out that url.Parse/url.ParseRequestURI will only set
+	// RawPath if EscapedPath() is different from RawPath. This header was originally added for our request signing system, so that
+	// the receiver can get access to the original URL string, the way the sender composed it. It looks like the best way to do that
+	// is to parse the RequestURI ourselves, by looking for the ? and just using everything before that.
+	rawPath := original.RequestURI
+	if question := strings.IndexRune(original.RequestURI, '?'); question != -1 {
+		rawPath = original.RequestURI[:question]
+	}
+	// fmt.Printf("%v\n", rawPath)
+	modified.Header.Add("X-Original-Path", rawPath)
 }
 
 // Returns true if the request should continue to be passed through the router
@@ -613,15 +628,15 @@ func makeHttpBridgeLogLevel(l log.Level) httpbridge.LogLevel {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func copyCookieToMSHTTP(org *http.Cookie) *ms_http.Cookie {
-	c := &ms_http.Cookie{
+func copyCookieToMSHTTP(org *http.Cookie) *http.Cookie {
+	c := &http.Cookie{
 		Name:  org.Name,
 		Value: org.Value,
 	}
 	return c
 }
 
-func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.Header) {
+func copyheadersIn(srcHost string, src http.Header, dstHost string, dst http.Header) {
 	for k, vv := range src {
 		for _, v := range vv {
 			if k == "Location" {
@@ -640,7 +655,7 @@ func copyheadersIn(srcHost string, src http.Header, dstHost string, dst ms_http.
 	}
 }
 
-func copyheadersOut(srcHost string, src ms_http.Header, dstHost string, dst http.Header, isHTTPS bool) {
+func copyheadersOut(srcHost string, src http.Header, dstHost string, dst http.Header, isHTTPS bool) {
 	for k, vv := range src {
 		for _, v := range vv {
 			if k == "Location" {

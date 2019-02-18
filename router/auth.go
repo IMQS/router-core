@@ -13,7 +13,6 @@ import (
 
 	"github.com/IMQS/log"
 	"github.com/IMQS/serviceauth"
-	ms_http "github.com/MSOpenTech/azure-sdk-for-go/core/http"
 )
 
 /*
@@ -179,7 +178,7 @@ func authInjectPureHub(log *log.Logger, w http.ResponseWriter, req *http.Request
 
 func pureHubGetToken(log *log.Logger, target *targetPassThroughAuth) error {
 	request_body := "grant_type=password&username=" + url.QueryEscape(target.config.Username) + "&password=" + url.QueryEscape(target.config.Password)
-	resp, err := ms_http.Post(target.config.LoginURL, "application/x-www-form-urlencoded", strings.NewReader(request_body))
+	resp, err := http.Post(target.config.LoginURL, "application/x-www-form-urlencoded", strings.NewReader(request_body))
 	if err != nil {
 		return fmt.Errorf("http.Post: %v", err)
 	}
@@ -390,7 +389,7 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 		http.Error(w, "Error loggin in to yellowfin", http.StatusInternalServerError)
 		return nil
 	}
-	authReq, err := ms_http.NewRequest("POST", serviceauth.GetAuthURL()+"/login_yellowfin", bytes.NewBuffer(paramsBytes))
+	authReq, err := http.NewRequest("POST", serviceauth.GetAuthURL()+"/login_yellowfin", bytes.NewBuffer(paramsBytes))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil
@@ -405,7 +404,7 @@ func authYellowfinLogin(log *log.Logger, w http.ResponseWriter, req *http.Reques
 		authReq.AddCookie(copyCookieToMSHTTP(cookieSession))
 	}
 
-	authResp, err := ms_http.DefaultClient.Do(authReq)
+	authResp, err := http.DefaultClient.Do(authReq)
 	if err != nil {
 		log.Errorf("Error logging in to yellowfin: (Transport error: %v)", err)
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
