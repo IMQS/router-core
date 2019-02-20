@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -136,6 +137,12 @@ func (s *Server) ListenAndServe() error {
 		var err error
 		for {
 			if secure {
+				if serviceconfig.IsContainer() {
+					err = fetchCerts(s.configHttp.CertFile, s.configHttp.CertKeyFile)
+					if err != nil {
+						break
+					}
+				}
 				err = hs.ListenAndServeTLS(s.configHttp.CertFile, s.configHttp.CertKeyFile)
 			} else {
 				err = hs.ListenAndServe()
@@ -167,6 +174,41 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	// unreachable
+	return nil
+}
+
+// Fetches the certs from the config service and stores them locally
+func fetchCerts(certPath, certKeyPath string) error {
+	var err error
+	//create the directories
+	err = os.MkdirAll(filepath.Dir(certPath), os.ModePerm)
+	if err != nil {
+		return err
+	}
+	err = os.MkdirAll(filepath.Dir(certKeyPath), os.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	//fetch the file contents and store them in the paths supplied
+	bytes, err := serviceconfig.GetConfigJson("", serviceName, serviceConfigVersion, filepath.Base(certPath))
+	if err != nil {
+		return err
+	}
+	err = ioutil.WriteFile(certPath, bytes, os.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	bytes, err = serviceconfig.GetConfigJson("", serviceName, serviceConfigVersion, filepath.Base(certKeyPath))
+	if err != nil {
+		return err
+	}
+	err = ioutil.WriteFile(certKeyPath, bytes, os.ModePerm)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
